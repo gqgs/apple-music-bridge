@@ -10,6 +10,7 @@ import tempfile
 import time
 from pathlib import Path
 
+from .backend_pins import LITE_ENDPOINT
 from .cache import safe_path
 from .model import Media, PlayerError
 
@@ -119,8 +120,45 @@ def job_config(output, country):
     }
 
 
+def lite_job_config(output, country):
+    # v0.1.4's nested schema, not the July classic flat schema.
+    return {
+        "general": {
+            "lite-server": LITE_ENDPOINT,
+            "storefront": country,
+            "exit-on-error": True,
+            "max-memory-limit": 256,
+        },
+        "media": {"get-m3u8-mode": "all", "alac-max": 192000, "atmos-max": 2768, "alac-fix": True},
+        "paths": {
+            "alac": str(output),
+            "atmos": str(output),
+            "aac": str(output),
+            "mv": str(output),
+            "album-folder": "{AlbumId}",
+            "song-file": "{SongId}",
+            "artist-folder": "",
+            "limit-max": 200,
+        },
+        "metadata": {
+            "lyrics": {"embed": False, "save-file": False},
+            "artwork": {
+                "embed": False,
+                "save-artist": False,
+                "save-animated": False,
+                "emby-animated": False,
+                "dl-for-playlist": False,
+            },
+        },
+        "convert": {"after-download": False},
+    }
+
+
 class Downloader:
-    def __init__(self, binary, staging, stage_limit=2 * 1024**3, timeout=900):
+    def __init__(self, binary, staging, stage_limit=2 * 1024**3, timeout=900, backend="classic"):
+        if backend not in {"classic", "lite"}:
+            raise PlayerError("Unknown downloader backend.")
+        self.backend = backend
         self.binary = binary
         self.staging = Path(staging)
         self.stage_limit = stage_limit
@@ -146,13 +184,16 @@ class Downloader:
         output.mkdir()
         config = job / "config.yaml"
         # JSON is valid YAML and avoids a YAML parser dependency.
-        config.write_text(json.dumps(job_config(output, track.country)))
+        make_config = lite_job_config if self.backend == "lite" else job_config
+        config.write_text(json.dumps(make_config(output, track.country)))
         config.chmod(0o600)
         process = None
         try:
             if cancel.is_set():
                 raise PlayerError("Download cancelled.")
             args = [str(Path(binary).absolute()), "--json"]
+            if self.backend == "lite":
+                args.extend(["--config", str(config)])
             if quality == "atmos":
                 args.append("--atmos")
             args.append(track.url)

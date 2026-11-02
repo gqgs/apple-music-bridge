@@ -22,6 +22,8 @@ class Controller:
     def __init__(self, cache, player, downloader="apple-music-downloader", device="auto"):
         self.cache, self.player = cache, player
         self.downloader, self.device = downloader, device
+        self.backend = "classic"
+        self.runtime = None
         self.queue = []
         self.executor = ThreadPoolExecutor(max_workers=1)
         self.future = None
@@ -74,6 +76,8 @@ class Controller:
             self.job.state = "Cancelled — Retry to resume"
 
     def tick(self):
+        if self.future and self.backend == "lite" and (not self.runtime or not self.runtime.ready):
+            self.cancel.set()
         if self.future and self.future.done():
             entry = self.job
             jobdir = None
@@ -137,11 +141,20 @@ class Controller:
                     if self.cache.get(entry.key):
                         entry.state = "Ready"
                         continue
+                    binary = self.downloader
+                    if self.backend == "lite":
+                        if not self.runtime or not self.runtime.ready:
+                            entry.state = "Failed"
+                            self.error = (
+                                "Managed lite is not ready. Open Backend setup, then Retry."
+                            )
+                            return
+                        binary = str(self.runtime.store.downloader)
                     self.job = entry
                     self.cancel = threading.Event()
                     entry.state = "Downloading"
                     self.future = self.executor.submit(
-                        Downloader(self.downloader, self.cache.staging).run,
+                        Downloader(binary, self.cache.staging, backend=self.backend).run,
                         entry.track,
                         entry.quality,
                         self.cancel,

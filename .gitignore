@@ -5,3 +5,11 @@ __pycache__/
 .ruff_cache/
 build/
 dist/
+# Local runtime/session artifacts must never be committed.
+rootfs/
+*.zip
+MUSIC_TOKEN
+DEV_TOKEN
+STOREFRONT_ID
+token_cache.json
+2fa.txt

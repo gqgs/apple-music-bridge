@@ -46,7 +46,12 @@ class Window(QMainWindow):
         self.settings_path = self.cache.root / "settings.json"
         if self.settings_path.is_symlink():
             raise PlayerError("Settings file must not be a symlink.")
-        self.settings = {"downloader": "apple-music-downloader", "device": "auto", "limit": 10}
+        self.settings = {
+            "downloader": "apple-music-downloader",
+            "device": "auto",
+            "limit": 10,
+            "backend": "classic",
+        }
         try:
             saved = json.loads(self.settings_path.read_text())
             for key in self.settings:
@@ -58,6 +63,8 @@ class Window(QMainWindow):
         self.controller = Controller(
             self.cache, Mpv(), self.settings["downloader"], self.settings["device"]
         )
+        self.controller.backend = "lite" if self.settings.get("backend") == "lite" else "classic"
+        self.setup_service = None
         self.catalog = Catalog()
         self.catalog_pool = ThreadPoolExecutor(max_workers=1)
         self.catalog_future = None
@@ -72,6 +79,7 @@ class Window(QMainWindow):
         title.setStyleSheet("font-size: 24px; font-weight: 600")
         title_row.addWidget(title)
         title_row.addStretch()
+        self.button(title_row, "Backend setup", self.backend_setup)
         self.button(title_row, "Settings", self.edit_settings)
         layout.addLayout(title_row)
         catalog_note = QLabel("Search public iTunes metadata · Apple Music availability may differ")
@@ -219,6 +227,28 @@ class Window(QMainWindow):
         except PlayerError as exc:
             self.controller.error = str(exc)
 
+    def backend_setup(self):
+        from .setup_ui import SetupDialog, SetupService
+
+        try:
+            if not self.setup_service:
+                self.setup_service = SetupService(self)
+            self.controller.runtime = self.setup_service.runtime
+            SetupDialog(self.setup_service, self.controller, self).exec()
+            self.settings["backend"] = self.controller.backend
+            self.save_settings()
+        except PlayerError as exc:
+            self.controller.error = str(exc)
+        except OSError:
+            self.controller.error = "Could not save backend choice. Check settings permissions."
+
+    def save_settings(self):
+        temporary = self.settings_path.with_suffix(".tmp")
+        if temporary.is_symlink() or self.settings_path.is_symlink():
+            raise OSError()
+        temporary.write_text(json.dumps(self.settings))
+        temporary.replace(self.settings_path)
+
     def edit_settings(self):
         dialog = QDialog(self)
         dialog.setWindowTitle("Player settings")
@@ -258,13 +288,10 @@ class Window(QMainWindow):
                 "downloader": self.controller.downloader,
                 "device": self.controller.device,
                 "limit": int(limit.value()),
+                "backend": self.controller.backend,
             }
             try:
-                temporary = self.settings_path.with_suffix(".tmp")
-                if temporary.is_symlink() or self.settings_path.is_symlink():
-                    raise OSError()
-                temporary.write_text(json.dumps(self.settings))
-                temporary.replace(self.settings_path)
+                self.save_settings()
                 self.cache.evict()
             except (OSError, PlayerError):
                 self.controller.error = (
@@ -325,6 +352,8 @@ class Window(QMainWindow):
         self.timer.stop()
         self.catalog_pool.shutdown(wait=False, cancel_futures=True)
         self.controller.close()
+        if self.setup_service:
+            self.setup_service.close()
         event.accept()
 
 

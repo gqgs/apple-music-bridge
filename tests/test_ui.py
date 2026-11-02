@@ -92,3 +92,39 @@ def test_gui_download_play_smoke(app, tmp_path, fake_downloader, fake_mpv):
         assert window.grab().save(screenshot)
     window.close()
     app.processEvents()
+
+
+def test_setup_consent_backend_selection_and_no_auto_execution(app, tmp_path):
+    import os
+
+    from apple_music_player.setup_ui import SetupDialog, SetupService
+
+    window = Window(tmp_path / "cache")
+    service = SetupService(window, tmp_path / "runtime")
+    dialog = SetupDialog(service, window.controller, window)
+    dialog.show()
+    app.processEvents()
+    assert service.runtime.process is None and service.future is None
+    dialog.install()
+    assert "explicitly" in service.error and service.future is None
+    dialog.backend.setCurrentIndex(1)
+    assert window.controller.backend == "lite"
+    assert window.controller.downloader == "apple-music-downloader"
+    dialog.backend.setCurrentIndex(0)
+    assert window.controller.backend == "classic"
+    dialog.password.setText("fixture-secret")
+    dialog.code.setText("123456")
+    dialog.cancel()
+    assert dialog.password.text() == dialog.code.text() == ""
+    from conftest import wait_until
+
+    wait_until(lambda: (service.tick(), service.future is None)[1])
+    dialog.backend.setCurrentIndex(1)
+    screenshot = os.environ.get("PLAYER_SETUP_SCREENSHOT")
+    if screenshot:
+        dialog.refresh()
+        assert dialog.grab().save(screenshot)
+    dialog.close()
+    service.close()
+    window.close()
+    app.processEvents()

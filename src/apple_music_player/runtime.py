@@ -90,20 +90,37 @@ class NoRedirect(HTTPRedirectHandler):
         return None
 
 
-def health_status():
+def health_details():
     # Deliberately local: never send unauthenticated wrapper requests through an HTTP proxy.
     try:
         opener = build_opener(ProxyHandler({}), NoRedirect())
         with opener.open(LITE_ENDPOINT + "/status", timeout=0.5) as response:
             if response.url != LITE_ENDPOINT + "/status":
-                return False
+                return False, ()
             raw = response.read(4097)
         if len(raw) > 4096:
-            return False
+            return False, ()
         data = json.loads(raw)
-        return data.get("code") == 0 and isinstance(data.get("data", {}).get("regions"), list)
+        regions = data.get("data", {}).get("regions")
+        healthy = data.get("code") == 0 and isinstance(regions, list)
+        # Pinned lite_main.cpp normalizes STOREFRONT_ID to a two-letter region.
+        # Never guess a mapping for unknown/numeric IDs or retain other payloads.
+        countries = tuple(
+            sorted(
+                set(
+                    value.lower()
+                    for value in (regions if healthy else [])
+                    if isinstance(value, str) and re.fullmatch(r"[A-Za-z]{2}", value)
+                )
+            )
+        )
+        return healthy, countries
     except Exception:
-        return False
+        return False, ()
+
+
+def health_status():
+    return health_details()[0]
 
 
 class ManagedRuntime:
@@ -119,6 +136,7 @@ class ManagedRuntime:
         self.state = "Not started" if store.current.exists() else "Not installed"
         self.ready = False
         self.starting = False
+        self.regions = ()
         self.args_fd = None
         self.fifo_fd = None
         self.code_ready = threading.Event()
@@ -378,7 +396,7 @@ class ManagedRuntime:
                 self.stop()
                 self.state = "Login timed out; previous session restored. Retry when ready."
         else:
-            healthy = health_status()
+            healthy, self.regions = health_details()
             self.ready = healthy and self.signed_in()
             if healthy:
                 self.last_healthy = time.monotonic()

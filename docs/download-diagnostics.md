@@ -65,3 +65,13 @@ BR song URL. Live public lookup was unavailable in the execution environment,
 so this does not establish cross-catalog ID equivalence or every track's
 subscription availability. If a fresh BR result still fails, report that one
 song's public URL for comparison; do not reauthenticate based on this error alone.
+
+Starting directly in search could still reuse a saved US choice without opening
+that BR URL. The UI now prominently compares the selected storefront with the
+backend's normalized two-letter `/status` region, with a button to adopt it.
+Fresh setups have no implicit US default. Unknown/numeric/multiple backend
+regions are not guessed. Country edits persist immediately; changing the field
+invalidates searches. The controller rejects both newly added and previously
+queued mismatched tracks before download, preserving their original IDs.
+Qt mouse/keyboard regressions cover selecting BR, searching Albums, opening
+tracks and queueing; `docs/storefront-smoke.png` uses synthetic backend metadata.

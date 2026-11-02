@@ -203,7 +203,7 @@ def test_login_memfd_and_events_redaction(tmp_path):
 
 
 def test_login_two_factor_cancel_restore_and_ready(installed, monkeypatch):
-    monkeypatch.setattr("apple_music_player.runtime.health_status", lambda: True)
+    monkeypatch.setattr("apple_music_player.runtime.health_details", lambda: (True, ("us",)))
     runtime = ManagedRuntime(installed)
     original = runtime.data / "old-session"
     original.write_text("synthetic old state")
@@ -256,11 +256,11 @@ def test_denied_busy_crash_unauthed_health(installed, monkeypatch):
     wait_until(lambda: (runtime.poll(), runtime.process is None)[1])
     assert "exited" in runtime.state
     monkeypatch.setenv("TEST_LITE_MODE", "ok")
-    monkeypatch.setattr("apple_music_player.runtime.health_status", lambda: True)
+    monkeypatch.setattr("apple_music_player.runtime.health_details", lambda: (True, ("us",)))
     runtime.start()
     runtime.poll()
     assert "authentication not verified" in runtime.state and not runtime.ready
-    monkeypatch.setattr("apple_music_player.runtime.health_status", lambda: False)
+    monkeypatch.setattr("apple_music_player.runtime.health_details", lambda: (False, ()))
     runtime.last_healthy -= 30
     runtime.poll()
     assert runtime.process is None and "health failed" in runtime.state
@@ -411,7 +411,7 @@ def test_lite_health_loss_cancels_only_active_download(tmp_path):
     cache = Cache(tmp_path / "cache", 1000)
     c = Controller(cache, Mpv())
     c.backend = "lite"
-    c.runtime = Mock(ready=False)
+    c.runtime = Mock(ready=False, regions=())
     c.add(Track("us", "12345", "Fixture"), "lossless")
     c.job = c.queue[0]
     c.job.state = "Downloading"
@@ -544,7 +544,7 @@ def test_closing_setup_preserves_service_and_polling(app, installed, tmp_path, m
     runtime = service.runtime
     for name in (".player-login-ok", "DEV_TOKEN", "MUSIC_TOKEN", "STOREFRONT_ID"):
         (runtime.data / name).write_text("synthetic-session")
-    monkeypatch.setattr("apple_music_player.runtime.health_status", lambda: True)
+    monkeypatch.setattr("apple_music_player.runtime.health_details", lambda: (True, ("us",)))
     dialog = SetupDialog(service, window.controller, window)
     try:
         runtime.start()
@@ -656,7 +656,7 @@ def test_window_autostarts_only_saved_managed_once(
     from apple_music_player.app import Window
 
     monkeypatch.setattr("apple_music_player.setup_ui.RuntimeStore", lambda root: installed)
-    monkeypatch.setattr("apple_music_player.runtime.health_status", lambda: True)
+    monkeypatch.setattr("apple_music_player.runtime.health_details", lambda: (True, ("us",)))
     if saved:
         data = installed.current / "rootfs/data"
         for name in (".player-login-ok", "DEV_TOKEN", "MUSIC_TOKEN", "STOREFRONT_ID"):
@@ -706,6 +706,39 @@ def test_queue_waits_for_managed_startup_but_not_explicit_stop(installed, tmp_pa
         runtime.cancel.set()
         controller.tick()
         assert controller.queue[0].state == "Failed" and controller.future is None
+    finally:
+        controller.close()
+        runtime.close()
+
+
+def test_health_region_allowlist(monkeypatch):
+    from apple_music_player.runtime import health_details
+
+    response = io.BytesIO(b'{"code":0,"data":{"regions":["BR","143441","private-value", "br"]}}')
+    response.url = "http://127.0.0.1:12340/status"
+    opener = Mock()
+    opener.open.return_value = response
+    monkeypatch.setattr("apple_music_player.runtime.build_opener", lambda *_: opener)
+    assert health_details() == (True, ("br",))
+
+
+def test_old_us_queue_cannot_download_after_br_backend_ready(installed, tmp_path):
+    runtime = ManagedRuntime(installed)
+    controller = Controller(Cache(tmp_path / "cache", 1000), Mpv(), "unused")
+    controller.add(Track("us", "12345", "Smother — Daughter"), "lossless")
+    controller.backend = "lite"
+    controller.runtime = runtime
+    runtime.regions = ("br",)
+    runtime.ready = True
+    try:
+        controller.tick()
+        assert controller.future is None
+        assert controller.queue[0].state == "Failed — storefront mismatch"
+        assert controller.queue[0].track.country == "us"  # Never silently rewrite IDs.
+        controller.retry()
+        controller.tick()
+        assert controller.future is None
+        assert "managed backend reports BR" in controller.error
     finally:
         controller.close()
         runtime.close()

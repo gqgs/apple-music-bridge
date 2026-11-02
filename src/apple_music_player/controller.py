@@ -35,10 +35,23 @@ class Controller:
         self.stopped = False
 
     def add(self, track, quality):
+        if self.reject_storefront(track):
+            return
         key = track.key(quality)
         if not any(entry.key == key for entry in self.queue):
             self.queue.append(Entry(track, quality))
         self.protect()
+
+    def reject_storefront(self, track):
+        regions = getattr(self.runtime, "regions", ()) if self.backend == "lite" else ()
+        if len(regions) == 1 and track.country != regions[0]:
+            self.error = (
+                f"Track is {track.country.upper()}; managed backend reports {regions[0].upper()}. "
+                "Use the backend storefront, search again, and replace this queue entry. "
+                "Song IDs will not be remapped automatically."
+            )
+            return True
+        return False
 
     def protect(self):
         self.cache.protected = {entry.key for entry in self.queue}
@@ -138,6 +151,9 @@ class Controller:
             candidates = self.queue[:2] if self.current else self.queue[:1]
             for entry in candidates:
                 if entry.state == "Queued":
+                    if self.reject_storefront(entry.track):
+                        entry.state = "Failed — storefront mismatch"
+                        return
                     if self.cache.get(entry.key):
                         entry.state = "Ready"
                         continue

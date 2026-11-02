@@ -174,3 +174,83 @@ def test_br_direct_song_adopts_and_persists_storefront(app, tmp_path, monkeypatc
         assert reopened.country.text() == "gb"  # Invalid URLs cannot change settings.
     finally:
         reopened.close()
+
+
+def test_qt_backend_storefront_choice_search_and_queue(app, tmp_path, monkeypatch):
+    import json
+    from types import SimpleNamespace
+
+    from conftest import wait_until
+    from PySide6.QtCore import Qt
+    from PySide6.QtTest import QTest
+
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    (cache / "settings.json").write_text(json.dumps({"storefront": "us"}))
+    window = Window(cache)
+    window.startup_attempted = True
+    window.controller.backend = "lite"
+    window.controller.runtime = SimpleNamespace(regions=("br",))
+    monkeypatch.setattr(window.controller, "tick", lambda: None)
+    calls = []
+
+    def request(endpoint, **params):
+        calls.append((endpoint, params))
+        return [ALBUM] if endpoint == "search" else [ALBUM, *SONGS]
+
+    monkeypatch.setattr(window.catalog, "request", request)
+    window.show()
+    window.tick()
+    app.processEvents()
+    try:
+        assert "Browsing US" in window.storefront_notice.text()
+        assert "backend reports BR" in window.storefront_notice.text()
+        assert window.use_backend_country.isVisible()
+        # A stale US result cannot queue even if it somehow survives UI invalidation.
+        window.controller.add(Track("us", "99999", "Smother — Daughter"), "lossless")
+        assert not window.controller.queue
+        assert "Track is US" in window.controller.error
+        QTest.mouseClick(window.use_backend_country, Qt.LeftButton)
+        assert window.country.text() == "br"
+        assert json.loads(window.settings_path.read_text())["storefront"] == "br"
+        QTest.mouseClick(window.search, Qt.LeftButton)
+        QTest.keyClicks(window.search, "daughter if you leave")
+        window.search_kind.setCurrentIndex(1)
+        QTest.keyClick(window.search, Qt.Key_Return)
+        wait_until(lambda: (app.processEvents(), window.tick(), len(window.results) == 1)[2])
+        assert calls[-1][1]["country"] == "br"
+        window.result_list.setCurrentRow(0)
+        QTest.mouseClick(window.selected_button, Qt.LeftButton)
+        wait_until(lambda: (app.processEvents(), window.tick(), len(window.results) == 2)[2])
+        QTest.mouseClick(window.all_button, Qt.LeftButton)
+        assert [entry.track.country for entry in window.controller.queue] == ["br", "br"]
+        assert calls[-1][1]["country"] == "br"
+        # Editing storefront persists on text change, without relying on focus loss.
+        window.country.setFocus()
+        window.country.selectAll()
+        QTest.keyClicks(window.country, "us")
+        assert not window.results
+        assert json.loads(window.settings_path.read_text())["storefront"] == "us"
+    finally:
+        window.close()
+
+
+def test_fresh_storefront_uses_only_unambiguous_backend_region(app, tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    window = Window(tmp_path / "cache")
+    window.startup_attempted = True
+    window.controller.backend = "lite"
+    window.controller.runtime = SimpleNamespace(regions=())
+    monkeypatch.setattr(window.controller, "tick", lambda: None)
+    try:
+        window.tick()
+        assert window.country.text() == ""  # No silent US fallback.
+        window.controller.runtime.regions = ("br", "us")
+        window.tick()
+        assert window.country.text() == ""
+        window.controller.runtime.regions = ("br",)
+        window.tick()
+        assert window.country.text() == "br"
+    finally:
+        window.close()

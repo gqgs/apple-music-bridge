@@ -58,7 +58,7 @@ class Window(QMainWindow):
             "device": "auto",
             "limit": 10,
             "backend": "classic",
-            "storefront": "us",
+            "storefront": "",
         }
         try:
             saved = json.loads(self.settings_path.read_text())
@@ -68,7 +68,7 @@ class Window(QMainWindow):
         except (OSError, ValueError, TypeError):
             pass
         if not re.fullmatch(r"[a-z]{2}", self.settings["storefront"]):
-            self.settings["storefront"] = "us"
+            self.settings["storefront"] = ""
         self.cache.limit = max(1, min(1024, self.settings["limit"])) * GIB
         self.controller = Controller(
             self.cache, Mpv(), self.settings["downloader"], self.settings["device"]
@@ -117,14 +117,25 @@ class Window(QMainWindow):
         self.country = QLineEdit(self.settings["storefront"])
         self.country.setMaximumWidth(60)
         self.country.setMaxLength(2)
+        self.country.setPlaceholderText("e.g. br")
         self.country.setToolTip(
             "Account storefront (two letters). Opening an Apple Music URL adopts its country."
         )
-        self.country.textChanged.connect(self.invalidate_search)
+        self.country.textChanged.connect(self.storefront_changed)
         self.country.editingFinished.connect(self.remember_storefront)
         search_row.addWidget(self.country)
         self.button(search_row, "Search", self.search_catalog)
         layout.addLayout(search_row)
+        storefront_row = QHBoxLayout()
+        self.storefront_notice = QLabel()
+        self.storefront_notice.setTextFormat(Qt.PlainText)
+        self.storefront_notice.setWordWrap(True)
+        self.storefront_notice.setStyleSheet("font-size: 15px; font-weight: 600")
+        storefront_row.addWidget(self.storefront_notice, 1)
+        self.use_backend_country = QPushButton("Use backend storefront")
+        self.use_backend_country.clicked.connect(self.adopt_backend_storefront)
+        storefront_row.addWidget(self.use_backend_country)
+        layout.addLayout(storefront_row)
         self.catalog_status = QLabel("Search, browse a result's album, or paste a URL below.")
         self.catalog_status.setTextFormat(Qt.PlainText)
         layout.addWidget(self.catalog_status)
@@ -252,12 +263,43 @@ class Window(QMainWindow):
 
     def remember_storefront(self):
         country = self.country.text().lower()
-        if re.fullmatch(r"[a-z]{2}", country):
-            self.settings["storefront"] = country
-            try:
-                self.save_settings()
-            except OSError:
-                self.controller.error = "Could not save storefront. Check settings permissions."
+        self.settings["storefront"] = country if re.fullmatch(r"[a-z]{2}", country) else ""
+        try:
+            self.save_settings()
+        except OSError:
+            self.controller.error = "Could not save storefront. Check settings permissions."
+
+    def storefront_changed(self):
+        self.invalidate_search()
+        self.remember_storefront()
+        self.show_storefront()
+
+    def backend_storefront(self):
+        runtime = self.controller.runtime
+        regions = getattr(runtime, "regions", ()) if self.controller.backend == "lite" else ()
+        return regions[0] if len(regions) == 1 else ""
+
+    def adopt_backend_storefront(self):
+        country = self.backend_storefront()
+        if country:
+            self.country.setText(country)
+            self.catalog_status.setText("Storefront changed · search again for this catalog.")
+
+    def show_storefront(self):
+        country = self.country.text().lower()
+        backend = self.backend_storefront()
+        mismatch = bool(backend and country != backend)
+        self.use_backend_country.setVisible(mismatch)
+        self.use_backend_country.setText(f"Use {backend.upper()} storefront")
+        if not re.fullmatch(r"[a-z]{2}", country):
+            text = "Choose your account storefront before searching."
+        else:
+            text = f"Browsing {country.upper()}"
+        if backend:
+            text += f" · Managed backend reports {backend.upper()}"
+        if mismatch:
+            text += " · Mismatched tracks will not download."
+        self.storefront_notice.setText(text)
 
     def browse_album(self):
         row = self.result_list.currentRow()
@@ -392,6 +434,9 @@ class Window(QMainWindow):
                 )
 
     def tick(self):
+        if not self.country.text() and not self.country.hasFocus() and self.backend_storefront():
+            self.adopt_backend_storefront()
+        self.show_storefront()
         if self.controller.backend == "lite":
             service = self.setup_service
             text = "Managed service not started · open Backend setup"

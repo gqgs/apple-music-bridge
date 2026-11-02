@@ -8,6 +8,13 @@ class PlayerError(Exception):
 
 
 @dataclass(frozen=True)
+class Album:
+    country: str
+    id: str
+    title: str
+
+
+@dataclass(frozen=True)
 class Track:
     country: str
     id: str

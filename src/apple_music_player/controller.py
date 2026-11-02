@@ -22,6 +22,8 @@ class Controller:
     def __init__(self, cache, player, downloader="apple-music-downloader", device="auto"):
         self.cache, self.player = cache, player
         self.downloader, self.device = downloader, device
+        self.backend = "classic"
+        self.runtime = None
         self.queue = []
         self.executor = ThreadPoolExecutor(max_workers=1)
         self.future = None
@@ -33,10 +35,23 @@ class Controller:
         self.stopped = False
 
     def add(self, track, quality):
+        if self.reject_storefront(track):
+            return
         key = track.key(quality)
         if not any(entry.key == key for entry in self.queue):
             self.queue.append(Entry(track, quality))
         self.protect()
+
+    def reject_storefront(self, track):
+        regions = getattr(self.runtime, "regions", ()) if self.backend == "lite" else ()
+        if len(regions) == 1 and track.country != regions[0]:
+            self.error = (
+                f"Track is {track.country.upper()}; managed backend reports {regions[0].upper()}. "
+                "Use the backend storefront, search again, and replace this queue entry. "
+                "Song IDs will not be remapped automatically."
+            )
+            return True
+        return False
 
     def protect(self):
         self.cache.protected = {entry.key for entry in self.queue}
@@ -74,6 +89,8 @@ class Controller:
             self.job.state = "Cancelled — Retry to resume"
 
     def tick(self):
+        if self.future and self.backend == "lite" and (not self.runtime or not self.runtime.ready):
+            self.cancel.set()
         if self.future and self.future.done():
             entry = self.job
             jobdir = None
@@ -134,14 +151,35 @@ class Controller:
             candidates = self.queue[:2] if self.current else self.queue[:1]
             for entry in candidates:
                 if entry.state == "Queued":
+                    if self.reject_storefront(entry.track):
+                        entry.state = "Failed — storefront mismatch"
+                        return
                     if self.cache.get(entry.key):
                         entry.state = "Ready"
                         continue
+                    binary = self.downloader
+                    if self.backend == "lite":
+                        if not self.runtime or not self.runtime.ready:
+                            if (
+                                self.runtime
+                                and not self.runtime.cancel.is_set()
+                                and (
+                                    self.runtime.starting
+                                    or (self.runtime.mode == "service" and self.runtime.process)
+                                )
+                            ):
+                                return  # Leave queued while saved service startup is in progress.
+                            entry.state = "Failed"
+                            self.error = (
+                                "Managed lite is not ready. Open Backend setup, then Retry."
+                            )
+                            return
+                        binary = str(self.runtime.store.downloader)
                     self.job = entry
                     self.cancel = threading.Event()
                     entry.state = "Downloading"
                     self.future = self.executor.submit(
-                        Downloader(self.downloader, self.cache.staging).run,
+                        Downloader(binary, self.cache.staging, backend=self.backend).run,
                         entry.track,
                         entry.quality,
                         self.cancel,

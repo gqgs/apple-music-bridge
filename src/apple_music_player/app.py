@@ -1,10 +1,12 @@
 import json
 import os
+import re
 import sys
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from PySide6.QtCore import Qt, QTimer
+from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import (
     QApplication,
     QComboBox,
@@ -25,18 +27,23 @@ from PySide6.QtWidgets import (
 )
 
 from .cache import Cache
-from .catalog import Catalog
+from .catalog import Catalog, CatalogDeferred
 from .controller import Controller
-from .model import PlayerError, Track, parse_url
+from .model import Album, PlayerError, Track, parse_url
 from .playback import Mpv
 
 GIB = 1024**3
+
+
+def application_icon():
+    return QIcon(str(Path(__file__).parent / "assets" / "logo.svg"))
 
 
 class Window(QMainWindow):
     def __init__(self, root=None):
         super().__init__()
         self.setWindowTitle("Apple Music Player")
+        self.setWindowIcon(application_icon())
         self.resize(980, 740)
         root = (
             root
@@ -46,7 +53,13 @@ class Window(QMainWindow):
         self.settings_path = self.cache.root / "settings.json"
         if self.settings_path.is_symlink():
             raise PlayerError("Settings file must not be a symlink.")
-        self.settings = {"downloader": "apple-music-downloader", "device": "auto", "limit": 10}
+        self.settings = {
+            "downloader": "apple-music-downloader",
+            "device": "auto",
+            "limit": 10,
+            "backend": "classic",
+            "storefront": "br",
+        }
         try:
             saved = json.loads(self.settings_path.read_text())
             for key in self.settings:
@@ -54,15 +67,28 @@ class Window(QMainWindow):
                     self.settings[key] = saved[key]
         except (OSError, ValueError, TypeError):
             pass
+        if not re.fullmatch(r"[a-z]{2}", self.settings["storefront"]):
+            self.settings["storefront"] = "br"
         self.cache.limit = max(1, min(1024, self.settings["limit"])) * GIB
         self.controller = Controller(
             self.cache, Mpv(), self.settings["downloader"], self.settings["device"]
         )
+        self.controller.backend = "lite" if self.settings.get("backend") == "lite" else "classic"
+        self.setup_service = None
+        self.closing = False
+        self.startup_attempted = False
         self.catalog = Catalog()
         self.catalog_pool = ThreadPoolExecutor(max_workers=1)
         self.catalog_future = None
+        self.catalog_request = None
+        self.catalog_retries = 0
+        self.catalog_timer = QTimer(self)
+        self.catalog_timer.setSingleShot(True)
+        self.catalog_timer.timeout.connect(self.resume_catalog)
         self.generation = 0
         self.results = []
+        self.pending_result_kind = "songs"
+        self.pending_album_title = ""
         self.rendered_queue = None
         outer = QWidget()
         self.setCentralWidget(outer)
@@ -72,8 +98,13 @@ class Window(QMainWindow):
         title.setStyleSheet("font-size: 24px; font-weight: 600")
         title_row.addWidget(title)
         title_row.addStretch()
+        self.button(title_row, "Backend setup", self.backend_setup)
         self.button(title_row, "Settings", self.edit_settings)
         layout.addLayout(title_row)
+        self.backend_status = QLabel()
+        self.backend_status.setTextFormat(Qt.PlainText)
+        self.backend_status.setWordWrap(True)
+        layout.addWidget(self.backend_status)
         catalog_note = QLabel("Search public iTunes metadata · Apple Music availability may differ")
         layout.addWidget(catalog_note)
         search_row = QHBoxLayout()
@@ -82,23 +113,45 @@ class Window(QMainWindow):
         self.search.textChanged.connect(self.invalidate_search)
         self.search.returnPressed.connect(self.search_catalog)
         search_row.addWidget(self.search, 1)
-        self.country = QLineEdit("us")
+        self.search_kind = QComboBox()
+        self.search_kind.addItem("Songs", "song")
+        self.search_kind.addItem("Albums", "album")
+        self.search_kind.setCurrentIndex(1)
+        self.search_kind.currentIndexChanged.connect(self.invalidate_search)
+        search_row.addWidget(self.search_kind)
+        search_row.addWidget(QLabel("Storefront"))
+        self.country = QLineEdit(self.settings["storefront"])
         self.country.setMaximumWidth(60)
         self.country.setMaxLength(2)
-        self.country.setToolTip("Two-letter storefront matching your Apple Music account")
-        self.country.textChanged.connect(self.invalidate_search)
+        self.country.setPlaceholderText("e.g. br")
+        self.country.setToolTip(
+            "Account storefront (two letters). Opening an Apple Music URL adopts its country."
+        )
+        self.country.textChanged.connect(self.storefront_changed)
+        self.country.editingFinished.connect(self.remember_storefront)
         search_row.addWidget(self.country)
         self.button(search_row, "Search", self.search_catalog)
         layout.addLayout(search_row)
+        storefront_row = QHBoxLayout()
+        self.storefront_notice = QLabel()
+        self.storefront_notice.setTextFormat(Qt.PlainText)
+        self.storefront_notice.setWordWrap(True)
+        self.storefront_notice.setStyleSheet("font-size: 15px; font-weight: 600")
+        storefront_row.addWidget(self.storefront_notice, 1)
+        self.use_backend_country = QPushButton("Use backend storefront")
+        self.use_backend_country.clicked.connect(self.adopt_backend_storefront)
+        storefront_row.addWidget(self.use_backend_country)
+        layout.addLayout(storefront_row)
         self.catalog_status = QLabel("Search, browse a result's album, or paste a URL below.")
+        self.catalog_status.setTextFormat(Qt.PlainText)
         layout.addWidget(self.catalog_status)
         self.result_list = QListWidget()
         self.result_list.itemDoubleClicked.connect(lambda _: self.add_selected())
         layout.addWidget(self.result_list, 2)
         result_buttons = QHBoxLayout()
         self.button(result_buttons, "Browse album", self.browse_album)
-        self.button(result_buttons, "Queue selected", self.add_selected)
-        self.button(result_buttons, "Queue all results", self.add_all)
+        self.selected_button = self.button(result_buttons, "Queue selected", self.add_selected)
+        self.all_button = self.button(result_buttons, "Queue all results", self.add_all)
         result_buttons.addStretch()
         self.quality = QComboBox()
         self.quality.addItem("Prefer Lossless", "lossless")
@@ -152,6 +205,34 @@ class Window(QMainWindow):
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.tick)
         self.timer.start(100)
+        QTimer.singleShot(0, self.start_saved_backend)
+
+    def ensure_setup_service(self):
+        from .setup_ui import SetupService
+
+        if not self.setup_service:
+            self.setup_service = SetupService(self)
+        self.controller.runtime = self.setup_service.runtime
+        return self.setup_service
+
+    def start_saved_backend(self):
+        # Exactly once per window startup; never called from the polling loop.
+        if self.closing or self.startup_attempted or self.controller.backend != "lite":
+            return
+        self.startup_attempted = True
+        try:
+            service = self.ensure_setup_service()
+            if service.future or service.runtime.process or service.runtime.cancel.is_set():
+                return
+            if service.runtime.store.current.exists() and service.runtime.signed_in():
+                service.runtime.state = "Starting saved managed service"
+                service.dispatch(service.runtime.start)
+            else:
+                service.runtime.state = "Setup incomplete · open Backend setup"
+        except (PlayerError, OSError):
+            self.controller.error = (
+                "Managed startup failed. Open Backend setup to check its status."
+            )
 
     def button(self, row, text, action):
         button = QPushButton(text)
@@ -159,42 +240,123 @@ class Window(QMainWindow):
         row.addWidget(button)
         return button
 
-    def invalidate_search(self):
+    def invalidate_search(self, *_, clear=False):
         self.generation += 1
-
-    def request_catalog(self, operation, *args):
-        self.generation += 1
+        self.catalog_timer.stop()
+        self.catalog_request = None
         if self.catalog_future:
             self.catalog_future[1].cancel()
+            self.catalog_future = None
+        if clear:
+            self.results = []
+            self.result_list.clear()
+            self.selected_button.setEnabled(False)
+            self.all_button.setEnabled(False)
+
+    def request_catalog(self, operation, *args, result_kind="songs", album_title=""):
+        self.invalidate_search()
+        self.pending_result_kind = result_kind
+        self.pending_album_title = album_title
+        self.catalog_request = (operation, args)
+        self.catalog_retries = 0
+        self.resume_catalog()
+
+    def resume_catalog(self):
+        if self.closing or self.catalog_request is None:
+            return
+        operation, args = self.catalog_request
         self.catalog_future = (self.generation, self.catalog_pool.submit(operation, *args))
         self.catalog_status.setText("Loading catalog…")
 
     def search_catalog(self):
         if self.search.text().strip():
+            self.remember_storefront()
             self.request_catalog(
-                self.catalog.search, self.search.text(), self.country.text().lower()
+                self.catalog.search,
+                self.search.text(),
+                self.country.text().lower(),
+                self.search_kind.currentData(),
+                result_kind="albums" if self.search_kind.currentData() == "album" else "songs",
             )
+
+    def remember_storefront(self):
+        country = self.country.text().lower()
+        self.settings["storefront"] = country if re.fullmatch(r"[a-z]{2}", country) else ""
+        try:
+            self.save_settings()
+        except OSError:
+            self.controller.error = "Could not save storefront. Check settings permissions."
+
+    def storefront_changed(self):
+        self.invalidate_search(clear=True)
+        self.remember_storefront()
+        self.show_storefront()
+
+    def backend_storefront(self):
+        runtime = self.controller.runtime
+        regions = getattr(runtime, "regions", ()) if self.controller.backend == "lite" else ()
+        return regions[0] if len(regions) == 1 else ""
+
+    def adopt_backend_storefront(self):
+        country = self.backend_storefront()
+        if country:
+            self.country.setText(country)
+            self.catalog_status.setText("Storefront changed · search again for this catalog.")
+
+    def show_storefront(self):
+        country = self.country.text().lower()
+        backend = self.backend_storefront()
+        mismatch = bool(backend and country != backend)
+        self.use_backend_country.setVisible(mismatch)
+        self.use_backend_country.setText(f"Use {backend.upper()} storefront")
+        if not re.fullmatch(r"[a-z]{2}", country):
+            text = "Choose your account storefront before searching."
+        else:
+            text = f"Browsing {country.upper()}"
+        if backend:
+            text += f" · Managed backend reports {backend.upper()}"
+        if mismatch:
+            text += " · Mismatched tracks will not download."
+        self.storefront_notice.setText(text)
 
     def browse_album(self):
         row = self.result_list.currentRow()
-        if 0 <= row < len(self.results) and self.results[row].album_id:
-            track = self.results[row]
-            self.request_catalog(self.catalog.album, track.album_id, track.country)
+        if 0 <= row < len(self.results):
+            item = self.results[row]
+            album_id = item.id if isinstance(item, Album) else item.album_id
+            if album_id:
+                self.request_catalog(
+                    self.catalog.album,
+                    album_id,
+                    item.country,
+                    album_title=item.title if isinstance(item, Album) else "Album tracks",
+                )
 
     def add_selected(self):
         row = self.result_list.currentRow()
         if 0 <= row < len(self.results):
-            self.controller.add(self.results[row], self.quality.currentData())
+            if isinstance(self.results[row], Album):
+                self.browse_album()
+            else:
+                self.controller.add(self.results[row], self.quality.currentData())
 
     def add_all(self):
         for track in self.results:
-            self.controller.add(track, self.quality.currentData())
+            if isinstance(track, Track):
+                self.controller.add(track, self.quality.currentData())
 
     def add_url(self):
         try:
             country, kind, item = parse_url(self.url.text())
+            changed = self.country.text().lower() != country
+            self.country.setText(country)  # Invalidates old results and in-flight requests.
+            self.remember_storefront()
+            if changed:
+                self.catalog_status.setText(
+                    f"Storefront changed to {country.upper()} from URL · search again to browse."
+                )
             if kind == "album":
-                self.request_catalog(self.catalog.album, item, country)
+                self.request_catalog(self.catalog.album, item, country, album_title="Album tracks")
             else:
                 self.controller.add(
                     Track(country, item, f"Song {item}"), self.quality.currentData()
@@ -218,6 +380,26 @@ class Window(QMainWindow):
             self.controller.player.command("seek", duration * self.seek.value() / 1000, "absolute")
         except PlayerError as exc:
             self.controller.error = str(exc)
+
+    def backend_setup(self):
+        from .setup_ui import SetupDialog
+
+        try:
+            self.ensure_setup_service()
+            SetupDialog(self.setup_service, self.controller, self).exec()
+            self.settings["backend"] = self.controller.backend
+            self.save_settings()
+        except PlayerError as exc:
+            self.controller.error = str(exc)
+        except OSError:
+            self.controller.error = "Could not save backend choice. Check settings permissions."
+
+    def save_settings(self):
+        temporary = self.settings_path.with_suffix(".tmp")
+        if temporary.is_symlink() or self.settings_path.is_symlink():
+            raise OSError()
+        temporary.write_text(json.dumps(self.settings))
+        temporary.replace(self.settings_path)
 
     def edit_settings(self):
         dialog = QDialog(self)
@@ -258,13 +440,11 @@ class Window(QMainWindow):
                 "downloader": self.controller.downloader,
                 "device": self.controller.device,
                 "limit": int(limit.value()),
+                "backend": self.controller.backend,
+                "storefront": self.settings["storefront"],
             }
             try:
-                temporary = self.settings_path.with_suffix(".tmp")
-                if temporary.is_symlink() or self.settings_path.is_symlink():
-                    raise OSError()
-                temporary.write_text(json.dumps(self.settings))
-                temporary.replace(self.settings_path)
+                self.save_settings()
                 self.cache.evict()
             except (OSError, PlayerError):
                 self.controller.error = (
@@ -272,6 +452,21 @@ class Window(QMainWindow):
                 )
 
     def tick(self):
+        if not self.country.text() and not self.country.hasFocus() and self.backend_storefront():
+            self.adopt_backend_storefront()
+        self.show_storefront()
+        if self.controller.backend == "lite":
+            service = self.setup_service
+            text = "Managed service not started · open Backend setup"
+            if service:
+                text = (
+                    "Stopping managed service" if service.stop_requested else service.runtime.state
+                )
+                if service.error:
+                    text += " · " + service.error
+            self.backend_status.setText(text)
+        else:
+            self.backend_status.setText("External classic backend")
         if self.catalog_future and self.catalog_future[1].done():
             generation, future = self.catalog_future
             self.catalog_future = None
@@ -280,9 +475,43 @@ class Window(QMainWindow):
                     self.results = future.result()
                     self.result_list.clear()
                     self.result_list.addItems([track.title for track in self.results])
-                    self.catalog_status.setText(
-                        f"{len(self.results)} songs · double-click to queue"
+                    albums = self.pending_result_kind == "albums"
+                    self.selected_button.setText("Open album" if albums else "Queue selected")
+                    self.selected_button.setEnabled(bool(self.results))
+                    self.all_button.setText(
+                        "Queue album" if self.pending_album_title else "Queue all results"
                     )
+                    self.all_button.setEnabled(bool(self.results) and not albums)
+                    label = "albums" if albums else "songs"
+                    if len(self.results) == 1:
+                        label = label[:-1]
+                    action = "open album" if albums else "queue"
+                    context = self.pending_album_title
+                    self.catalog_status.setText(
+                        f"{context + ' · ' if context else ''}{len(self.results)} {label} · "
+                        + (
+                            f"double-click to {action}"
+                            if self.results
+                            else "try another query/storefront or paste an Apple Music URL"
+                        )
+                    )
+                except CatalogDeferred as exc:
+                    if exc.rate_limited:
+                        self.catalog_retries += 1
+                    if self.catalog_retries > 2 or exc.seconds > 60:
+                        self.catalog_request = None
+                        self.catalog_status.setText(
+                            "Catalog rate limit persists. Try again later; results are kept."
+                        )
+                    else:
+                        self.catalog_status.setText(
+                            "Catalog rate limited · retrying automatically…"
+                            if exc.rate_limited
+                            else "Waiting for catalog request spacing…"
+                        )
+                        self.catalog_timer.start(max(1, int(exc.seconds * 1000) + 1))
+                except PlayerError as exc:
+                    self.catalog_status.setText(str(exc))
                 except Exception:
                     self.catalog_status.setText(
                         "Catalog unavailable. Check network/storefront or paste a song URL."
@@ -295,7 +524,10 @@ class Window(QMainWindow):
                 "Cache operation failed. Check permissions/free space and restart the player."
             )
         c = self.controller
-        rows = [f"{e.state} · {e.track.title} · requested {e.quality}" for e in c.queue]
+        rows = [
+            f"{e.state} · {e.track.title} · {e.track.country.upper()} · requested {e.quality}"
+            for e in c.queue
+        ]
         if rows != self.rendered_queue:
             selected = self.queue_list.currentRow()
             self.queue_list.clear()
@@ -322,15 +554,20 @@ class Window(QMainWindow):
         )
 
     def closeEvent(self, event):
+        self.closing = True
+        self.invalidate_search()
         self.timer.stop()
         self.catalog_pool.shutdown(wait=False, cancel_futures=True)
         self.controller.close()
+        if self.setup_service:
+            self.setup_service.close()
         event.accept()
 
 
 def main():
     app = QApplication(sys.argv)
     app.setApplicationName("apple-music-player")
+    app.setWindowIcon(application_icon())
     try:
         window = Window()
     except PlayerError as exc:

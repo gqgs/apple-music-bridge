@@ -1,4 +1,5 @@
 import os
+import re
 import shutil
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -40,18 +41,12 @@ class SetupService(QObject):
         self.timer.timeout.connect(self.tick)
         self.timer.start(500)
 
-    def dispatch(self, operation, *args):
-        if self.future:
-            self.error = "Setup is busy. Wait for the current step or Cancel."
-            return False
-        self.error = ""
-        self.active_kind = operation.__name__
-        if self.active_kind in {"install", "start", "login"}:
-            self.runtime.cancel.clear()
-        self.future = self.pool.submit(operation, *args)
-        return True
+    @property
+    def busy(self):
+        # A queued/running user action is busy; periodic observation is not.
+        return self.future is not None and self.active_kind != "poll"
 
-    def tick(self):
+    def finish_completed(self):
         if self.future and self.future.done():
             try:
                 self.future.result()
@@ -61,7 +56,32 @@ class SetupService(QObject):
                 self.error = "Backend operation failed. Cancel and retry; diagnostics are withheld."
             self.future = None
             self.active_kind = ""
+
+    def dispatch(self, operation, *args):
+        self.finish_completed()
+        if self.busy:
+            self.error = "Setup is busy. Wait for the current step or Cancel."
+            return False
+        previous_poll = self.future
+        self.error = ""
+        self.active_kind = operation.__name__
+        if self.active_kind in {"install", "start", "login"}:
+            self.runtime.cancel.clear()
+
+        def perform():
+            # The single worker serializes actions after an in-flight poll. Observe
+            # its failure too; never discard a poll exception or submit concurrently.
+            if previous_poll:
+                previous_poll.result()
+            return operation(*args)
+
+        self.future = self.pool.submit(perform)
+        return True
+
+    def tick(self):
+        self.finish_completed()
         if not self.future and self.runtime.process:
+            self.active_kind = "poll"
             self.future = self.pool.submit(self.runtime.poll)
 
     def install(self, archive):
@@ -144,6 +164,7 @@ class SetupDialog(QDialog):
         self.code.setMaxLength(6)
         self.code.setEchoMode(QLineEdit.Password)
         self.code.setPlaceholderText("Six-digit code when requested")
+        self.code.textChanged.connect(self.refresh)
         code_row = QHBoxLayout()
         code_row.addWidget(self.code)
         self.code_button = QPushButton("Submit code")
@@ -196,7 +217,7 @@ class SetupDialog(QDialog):
         if self.controller.backend == "lite" and self.controller.future:
             self.service.error = "Cancel or finish the lite download before signing in again."
             return
-        if self.service.future:
+        if self.service.busy:
             self.service.error = "Setup is busy; wait before signing in."
             return
         username, password = self.username.text(), self.password.text()
@@ -206,8 +227,13 @@ class SetupDialog(QDialog):
 
     def submit_code(self):
         code = self.code.text()
-        self.code.setText("")
-        self.service.dispatch(self.service.runtime.submit_code, code)
+        if not self.service.runtime.can_submit_code or not re.fullmatch(r"[0-9]{6}", code):
+            self.service.error = "Wait for the verification prompt and enter six digits locally."
+            self.refresh()
+            return
+        if self.service.dispatch(self.service.runtime.submit_code, code):
+            self.code.setText("")
+        self.refresh()
 
     def cancel(self):
         if self.controller.backend == "lite":
@@ -222,13 +248,13 @@ class SetupDialog(QDialog):
     def refresh(self):
         r = self.service.runtime
         self.status.setText(r.state + ("\n" + self.service.error if self.service.error else ""))
-        busy = bool(self.service.future)
+        busy = self.service.busy
         self.install_button.setEnabled(not busy and not r.process)
         installed = r.store.current.exists()
         self.login_button.setEnabled(installed and not busy and r.mode != "login")
         self.start_button.setEnabled(installed and not busy and not r.process)
         self.code_button.setEnabled(
-            not busy and r.mode == "login" and r.state.startswith("Verification code required")
+            not busy and r.can_submit_code and bool(re.fullmatch(r"[0-9]{6}", self.code.text()))
         )
 
     def done(self, result):

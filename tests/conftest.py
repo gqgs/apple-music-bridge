@@ -108,3 +108,11 @@ def wait_until(callback, timeout=8):
             return
         time.sleep(0.02)
     pytest.fail("Timed out waiting for test process")
+
+
+@pytest.fixture(scope="session")
+def app():
+    from PySide6.QtWidgets import QApplication
+
+    app = QApplication.instance() or QApplication([])
+    yield app

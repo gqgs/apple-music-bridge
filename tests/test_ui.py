@@ -1,17 +1,8 @@
 from concurrent.futures import Future
 
-import pytest
-from PySide6.QtWidgets import QApplication
-
 from apple_music_player.app import Window
 from apple_music_player.catalog import Catalog
 from apple_music_player.model import Track
-
-
-@pytest.fixture(scope="module")
-def app():
-    app = QApplication.instance() or QApplication([])
-    yield app
 
 
 def test_catalog_fixture_and_no_videos():

@@ -119,6 +119,7 @@ class ManagedRuntime:
         self.ready = False
         self.args_fd = None
         self.fifo_fd = None
+        self.code_ready = threading.Event()
         self.started = 0.0
         self.last_healthy = 0.0
         self.data = store.current / "rootfs" / "data"
@@ -138,6 +139,7 @@ class ManagedRuntime:
             self.clean_fifo()
 
     def clean_fifo(self):
+        self.code_ready.clear()
         if self.fifo_fd is not None:
             os.close(self.fifo_fd)
             self.fifo_fd = None
@@ -276,8 +278,19 @@ class ManagedRuntime:
                 "Could not start private login. Previous session was restored."
             ) from None
 
+    @property
+    def can_submit_code(self):
+        process = self.process
+        return (
+            self.code_ready.is_set()
+            and self.mode == "login"
+            and not self.cancel.is_set()
+            and process is not None
+            and process.poll() is None
+        )
+
     def submit_code(self, code):
-        if self.mode != "login" or not self.events.two_factor.is_set():
+        if not self.can_submit_code:
             raise PlayerError("No verification code is currently requested.")
         if not re.fullmatch(r"[0-9]{6}", code):
             raise PlayerError("Enter the six-digit verification code locally.")
@@ -285,8 +298,9 @@ class ManagedRuntime:
         if self.cancel.is_set():
             self.stop()
             return
-        if self.fifo_fd is None or not self.state.startswith("Verification code required"):
+        if self.fifo_fd is None:
             raise PlayerError("The verification channel is no longer waiting. Cancel and retry.")
+        self.code_ready.clear()
         try:
             os.write(self.fifo_fd, (code + "\n").encode())
         except OSError:
@@ -334,14 +348,16 @@ class ManagedRuntime:
                 )
             return
         if self.mode == "login":
-            if self.events.two_factor.is_set() and self.state == "Signing in locally":
+            if self.events.two_factor.is_set() and self.fifo_fd is None:
                 self.clean_fifo()
                 os.mkfifo(self.fifo, 0o600)
                 # Upstream file_exists() uses fopen/fclose before the final fscanf.
                 # Holding both ends open lets those probes complete without consuming
                 # the code and keeps it buffered until the actual credential read.
                 self.fifo_fd = os.open(self.fifo, os.O_RDWR | os.O_NONBLOCK | os.O_NOFOLLOW)
-                self.state = "Verification code required (60-second wrapper timeout)"
+                self.state = "Verification code required (within the overall login deadline)"
+                # Publish readiness only after both FIFO endpoints are open.
+                self.code_ready.set()
             if time.monotonic() - self.started > 180:
                 self.stop()
                 self.state = "Login timed out; previous session restored. Retry when ready."
@@ -364,6 +380,7 @@ class ManagedRuntime:
                     )
 
     def _stop_process(self):
+        self.code_ready.clear()
         if self.process:
             try:
                 os.killpg(self.process.pid, signal.SIGINT)

@@ -406,3 +406,111 @@ def test_lite_health_loss_cancels_only_active_download(tmp_path):
     c.tick()
     assert c.queue[0].state.startswith("Cancelled")
     c.close()
+
+
+def test_two_factor_dialog_submits_while_polling(app, installed, tmp_path):
+    from apple_music_player.app import Window
+    from apple_music_player.setup_ui import SetupDialog, SetupService
+
+    window = Window(tmp_path / "cache")
+    service = SetupService(window, tmp_path / "unused-runtime")
+    service.runtime.close()
+    service.runtime = ManagedRuntime(installed)
+    dialog = SetupDialog(service, window.controller, window)
+    dialog.show()
+    dialog.username.setText("fixture-user")
+    dialog.password.setText("fixture-secret")
+    dialog.login_button.click()
+
+    def pump():
+        app.processEvents()
+        # Deliberately schedule the next poll before refreshing, as the real timer
+        # does. The old bool(future) gate could never enable the button here.
+        service.tick()
+        dialog.refresh()
+
+    release = threading.Event()
+    try:
+        wait_until(lambda: (pump(), service.runtime.can_submit_code)[1])
+        assert service.runtime.fifo.is_fifo() and service.runtime.fifo_fd is not None
+        assert not dialog.code_button.isEnabled()
+        dialog.code.setText("12ab56")
+        assert not dialog.code_button.isEnabled()
+        dialog.code.setText("123456")
+        wait_until(lambda: (pump(), dialog.code_button.isEnabled())[1])
+        assert service.future is not None and service.active_kind == "poll"
+
+        entered = threading.Event()
+        original_poll = service.runtime.poll
+
+        def delayed_poll():
+            entered.set()
+            assert release.wait(5)
+            original_poll()
+
+        service.runtime.poll = delayed_poll
+        wait_until(lambda: (pump(), entered.is_set())[1])
+        dialog.refresh()
+        assert dialog.code_button.isEnabled()  # An unfinished poll is not a user action.
+        dialog.code_button.click()
+        assert service.active_kind == "submit_code" and service.busy
+        assert dialog.code.text() == "" and not dialog.code_button.isEnabled()
+        dialog.code.setText("654321")
+        assert not dialog.code_button.isEnabled()  # No second queued code.
+        release.set()
+        wait_until(lambda: (pump(), service.runtime.process is None)[1])
+        assert service.runtime.signed_in()
+        assert not service.runtime.can_submit_code and not dialog.code_button.isEnabled()
+        assert not service.runtime.fifo.exists() and service.runtime.fifo_fd is None
+    finally:
+        release.set()
+        dialog.close()
+        service.close()
+        window.close()
+        app.processEvents()
+
+
+def test_prompt_does_not_publish_readiness_before_fifo_or_after_cancel(installed):
+    runtime = ManagedRuntime(installed)
+    runtime.process = Mock()
+    runtime.process.poll.return_value = None
+    runtime.mode = "login"
+    runtime.state = "Signing in locally"
+    import time
+
+    runtime.started = time.monotonic()
+    runtime.events.two_factor.set()
+    try:
+        assert not runtime.can_submit_code
+        with pytest.raises(PlayerError, match="No verification"):
+            runtime.submit_code("123456")
+        runtime.poll()
+        assert runtime.can_submit_code and runtime.fifo_fd is not None
+        runtime.state = "Different display wording"
+        assert runtime.can_submit_code  # Status text is never a control protocol.
+        runtime.cancel.set()
+        assert not runtime.can_submit_code
+        runtime.cancel.clear()
+        runtime.process.poll.return_value = 0
+        assert not runtime.can_submit_code
+    finally:
+        runtime.process = None
+        runtime.clean_fifo()
+
+
+def test_fragmented_upstream_prompt_is_received_without_pipe_eof():
+    events = RuntimeEvents()
+    read_fd, write_fd = os.pipe()
+    stream = os.fdopen(read_fd, "rb")
+    reader = threading.Thread(target=events.drain, args=(stream,))
+    reader.start()
+    try:
+        os.write(write_fd, b"unrecognized fixture-secret\n2026-11-02 13:00:00.000 [WA")
+        assert not events.two_factor.is_set()
+        os.write(write_fd, b"RN ] Enter your 2FA code into /data/2fa.txt\n")
+        assert events.two_factor.wait(2)  # Writer remains open, just like a waiting login.
+        assert reader.is_alive()
+        assert "fixture-secret" not in repr(vars(events))
+    finally:
+        os.close(write_fd)
+        reader.join(timeout=2)

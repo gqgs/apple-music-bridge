@@ -2,6 +2,7 @@
 
 import json
 import os
+import re
 import selectors
 import shutil
 import signal
@@ -14,14 +15,75 @@ from .backend_pins import LITE_ENDPOINT
 from .cache import safe_path
 from .model import Media, PlayerError
 
+# Only fixed messages cross the subprocess boundary. Prefixes are from pinned
+# amdl v0.1.4 internal/app/{run,rip,media}.go; never include their error suffixes.
+DIAGNOSTICS = {
+    "config": "Downloader rejected its private job config. Report this category.",
+    "catalog-token": "Catalog access could not be obtained. Check network access to Apple Music.",
+    "catalog": "Catalog lookup failed. Check network, storefront and song availability.",
+    "catalog-401": "Catalog access was rejected (401). Wrapper login validity is still unknown.",
+    "catalog-403": "Catalog access was denied (403). Check network and storefront restrictions.",
+    "catalog-404": "Song or album was not found (404). Try its Apple Music URL in your storefront.",
+    "catalog-429": "Catalog rate limit reached (429). Wait before retrying.",
+    "wrapper": "Downloader could not use the local lite API. Check Backend setup status.",
+    "manifest": "No usable requested audio stream was found. Check song availability and quality.",
+    "download": "Audio download/decryption failed. Check network and Backend setup status.",
+    "finalize": "Downloaded media could not be finalized or tagged. Report this category.",
+    "unavailable": "The requested track/format is unavailable. Try another song or quality.",
+    "proxy": "Downloader network configuration failed. Report this category.",
+}
+ERROR_PREFIXES = (
+    (b"load Config failed:", "config"),
+    (b"proxy config error:", "proxy"),
+    (b"Failed to get token.", "catalog-token"),
+    (b"Failed to get song response.", "catalog"),
+    (b"Failed to get album response.", "catalog"),
+    (b"Failed to rip song:", "catalog"),
+    (b"Failed to rip album:", "catalog"),
+    ("\u26a0 Failed to extract info from manifest:".encode(), "manifest"),
+    (b"Failed to run v4:", "download"),
+    (b"Failed to dl aac-lc via lite-server:", "download"),
+    (b"Defragment failed:", "finalize"),
+    ("\u26a0 Failed to fix ALAC:".encode(), "finalize"),
+    ("\u26a0 Failed to write tags in media:".encode(), "finalize"),
+)
+
 
 class Summary:
-    """Bounded line parser: retain only a single final JSON path, no raw diagnostics."""
+    """Bounded parser: retain a result path and fixed categories, never raw logs."""
 
-    def __init__(self):
+    def __init__(self, accept_paths=True):
+        self.accept_paths = accept_paths
         self.buffer = b""
         self.dropping = False
         self.path = None
+        self.error = None
+        self.warning = None
+
+    def diagnose(self, line):
+        # run.go prints the queue preamble without a newline before ripSong.
+        line = re.sub(rb"^Queue [0-9]+ of [0-9]+: Song->", b"", line.strip())
+        for prefix, category in ERROR_PREFIXES:
+            if line.startswith(prefix):
+                if category == "catalog":
+                    match = re.fullmatch(
+                        rb"Failed to rip (?:song|album): (401 Unauthorized|403 Forbidden|"
+                        rb"404 Not Found|429 Too Many Requests)",
+                        line,
+                    )
+                    if match:
+                        category += "-" + match[1][:3].decode("ascii")
+                # Preserve the specific HTTP category over a later general error.
+                if not self.error or self.error == "catalog":
+                    self.error = category
+                return
+        if line == b"Unavailable":
+            self.error = self.error or "unavailable"
+        elif line.startswith(
+            (b"Warning: failed to query lite-server /status:", b"Error connecting to lite-server:")
+        ):
+            # These can recover; report only if the job ultimately has no media.
+            self.warning = "wrapper"
 
     def feed(self, chunk):
         for segment in chunk.splitlines(keepends=True):
@@ -32,10 +94,12 @@ class Summary:
                     self.dropping = True
             if segment.endswith(b"\n"):
                 if not self.dropping:
+                    self.diagnose(self.buffer)
                     try:
                         data = json.loads(self.buffer)
                         if (
-                            isinstance(data, list)
+                            self.accept_paths
+                            and isinstance(data, list)
                             and len(data) == 1
                             and isinstance(data[0], dict)
                             and isinstance(data[0].get("path"), str)
@@ -202,14 +266,16 @@ class Downloader:
                 cwd=job,
                 stdin=subprocess.DEVNULL,
                 stdout=subprocess.PIPE,
-                stderr=subprocess.DEVNULL,
+                stderr=subprocess.PIPE,
                 start_new_session=True,
             )
             summary = Summary()
+            diagnostics = Summary(accept_paths=False)
             started = time.monotonic()
             last_check = 0.0
             with selectors.DefaultSelector() as selector:
-                selector.register(process.stdout, selectors.EVENT_READ)
+                selector.register(process.stdout, selectors.EVENT_READ, summary)
+                selector.register(process.stderr, selectors.EVENT_READ, diagnostics)
                 while selector.get_map():
                     if cancel.is_set():
                         raise PlayerError("Download cancelled.")
@@ -224,17 +290,24 @@ class Downloader:
                     for key, _ in selector.select(timeout=0.1):
                         chunk = os.read(key.fileobj.fileno(), 16384)
                         if chunk:
-                            summary.feed(chunk)
+                            key.data.feed(chunk)
                         else:
                             selector.unregister(key.fileobj)
             summary.feed(b"\n")
+            diagnostics.feed(b"\n")
             try:
                 code = process.wait(timeout=5)
             except subprocess.TimeoutExpired:
                 raise PlayerError("Downloader did not exit after completing output.") from None
             if code != 0 or not summary.path:
+                category = (
+                    summary.error or diagnostics.error or summary.warning or diagnostics.warning
+                )
+                if category:
+                    raise PlayerError(f"Download failed [{category}]. {DIAGNOSTICS[category]}")
                 raise PlayerError(
-                    "Download failed or returned no media. Check wrapper/dependencies and retry."
+                    f"Download failed [no-result; exit {code}]. No valid media summary. "
+                    "Report this category, requested quality and storefront; do not share raw logs."
                 )
             stop_group(process)
             self.check_stage(job)
@@ -263,4 +336,6 @@ class Downloader:
         finally:
             if process and process.stdout:
                 process.stdout.close()
+            if process and process.stderr:
+                process.stderr.close()
             config.unlink(missing_ok=True)

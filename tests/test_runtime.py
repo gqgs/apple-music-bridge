@@ -298,10 +298,13 @@ assert config["general"]["exit-on-error"]
 assert not config["metadata"]["lyrics"]["embed"]
 assert not config["metadata"]["artwork"]["embed"]
 assert not config["convert"]["after-download"]
-path = pathlib.Path(config["paths"]["alac"]) / "audio.m4a"
+path = pathlib.Path(config["paths"]["alac"]) / "67890" / "12345.m4a"
+path.parent.mkdir()
 shutil.copyfile(os.environ["TEST_AUDIO"], path)
-print("raw fixture-secret")
-print(json.dumps([{"path": str(path), "song": "ignored"}]))
+print("Warning: failed to query lite-server /status: fixture-secret", file=sys.stderr)
+print("Queue 1 of 1: Song->Album")
+print(json.dumps([{"path": str(path), "artist": "Fixture", "artist_id": "42",
+                   "album": "Fixture album", "song": "ignored"}]))
 """)
     binary.chmod(0o700)
     monkeypatch.setenv("TEST_AUDIO", str(audio["alac"]))

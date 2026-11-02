@@ -6,7 +6,7 @@ import time
 from urllib.parse import urlencode
 from urllib.request import urlopen
 
-from .model import PlayerError, Track
+from .model import Album, PlayerError, Track
 
 
 class Catalog:
@@ -49,12 +49,28 @@ class Catalog:
             )
         return result
 
-    def search(self, query, country):
+    def albums(self, data, country):
+        return [
+            Album(
+                country,
+                str(row["collectionId"]),
+                f"{row.get('collectionName', 'Untitled')} — {row.get('artistName', '')}"[:300],
+            )
+            for row in data
+            if row.get("wrapperType") == "collection"
+            and row.get("collectionType") == "Album"
+            and re.fullmatch(r"[0-9]+", str(row.get("collectionId", "")))
+        ]
+
+    def search(self, query, country, entity="song"):
         if not re.fullmatch("[a-z]{2}", country):
             raise PlayerError("Storefront must be a two-letter country code, e.g. us.")
-        return self.tracks(
+        if entity not in {"song", "album"}:
+            raise PlayerError("Choose Songs or Albums.")
+        parse = self.albums if entity == "album" else self.tracks
+        return parse(
             self.request(
-                "search", term=query[:200], country=country, media="music", entity="song", limit=50
+                "search", term=query[:200], country=country, media="music", entity=entity, limit=50
             ),
             country,
         )

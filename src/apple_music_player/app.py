@@ -28,7 +28,7 @@ from PySide6.QtWidgets import (
 from .cache import Cache
 from .catalog import Catalog
 from .controller import Controller
-from .model import PlayerError, Track, parse_url
+from .model import Album, PlayerError, Track, parse_url
 from .playback import Mpv
 
 GIB = 1024**3
@@ -76,6 +76,8 @@ class Window(QMainWindow):
         self.catalog_future = None
         self.generation = 0
         self.results = []
+        self.pending_result_kind = "songs"
+        self.pending_album_title = ""
         self.rendered_queue = None
         outer = QWidget()
         self.setCentralWidget(outer)
@@ -96,6 +98,11 @@ class Window(QMainWindow):
         self.search.textChanged.connect(self.invalidate_search)
         self.search.returnPressed.connect(self.search_catalog)
         search_row.addWidget(self.search, 1)
+        self.search_kind = QComboBox()
+        self.search_kind.addItem("Songs", "song")
+        self.search_kind.addItem("Albums", "album")
+        self.search_kind.currentIndexChanged.connect(self.invalidate_search)
+        search_row.addWidget(self.search_kind)
         self.country = QLineEdit("us")
         self.country.setMaximumWidth(60)
         self.country.setMaxLength(2)
@@ -105,14 +112,15 @@ class Window(QMainWindow):
         self.button(search_row, "Search", self.search_catalog)
         layout.addLayout(search_row)
         self.catalog_status = QLabel("Search, browse a result's album, or paste a URL below.")
+        self.catalog_status.setTextFormat(Qt.PlainText)
         layout.addWidget(self.catalog_status)
         self.result_list = QListWidget()
         self.result_list.itemDoubleClicked.connect(lambda _: self.add_selected())
         layout.addWidget(self.result_list, 2)
         result_buttons = QHBoxLayout()
         self.button(result_buttons, "Browse album", self.browse_album)
-        self.button(result_buttons, "Queue selected", self.add_selected)
-        self.button(result_buttons, "Queue all results", self.add_all)
+        self.selected_button = self.button(result_buttons, "Queue selected", self.add_selected)
+        self.all_button = self.button(result_buttons, "Queue all results", self.add_all)
         result_buttons.addStretch()
         self.quality = QComboBox()
         self.quality.addItem("Prefer Lossless", "lossless")
@@ -175,9 +183,15 @@ class Window(QMainWindow):
 
     def invalidate_search(self):
         self.generation += 1
+        self.results = []
+        self.result_list.clear()
+        self.selected_button.setEnabled(False)
+        self.all_button.setEnabled(False)
 
-    def request_catalog(self, operation, *args):
-        self.generation += 1
+    def request_catalog(self, operation, *args, result_kind="songs", album_title=""):
+        self.invalidate_search()
+        self.pending_result_kind = result_kind
+        self.pending_album_title = album_title
         if self.catalog_future:
             self.catalog_future[1].cancel()
         self.catalog_future = (self.generation, self.catalog_pool.submit(operation, *args))
@@ -186,29 +200,44 @@ class Window(QMainWindow):
     def search_catalog(self):
         if self.search.text().strip():
             self.request_catalog(
-                self.catalog.search, self.search.text(), self.country.text().lower()
+                self.catalog.search,
+                self.search.text(),
+                self.country.text().lower(),
+                self.search_kind.currentData(),
+                result_kind="albums" if self.search_kind.currentData() == "album" else "songs",
             )
 
     def browse_album(self):
         row = self.result_list.currentRow()
-        if 0 <= row < len(self.results) and self.results[row].album_id:
-            track = self.results[row]
-            self.request_catalog(self.catalog.album, track.album_id, track.country)
+        if 0 <= row < len(self.results):
+            item = self.results[row]
+            album_id = item.id if isinstance(item, Album) else item.album_id
+            if album_id:
+                self.request_catalog(
+                    self.catalog.album,
+                    album_id,
+                    item.country,
+                    album_title=item.title if isinstance(item, Album) else "Album tracks",
+                )
 
     def add_selected(self):
         row = self.result_list.currentRow()
         if 0 <= row < len(self.results):
-            self.controller.add(self.results[row], self.quality.currentData())
+            if isinstance(self.results[row], Album):
+                self.browse_album()
+            else:
+                self.controller.add(self.results[row], self.quality.currentData())
 
     def add_all(self):
         for track in self.results:
-            self.controller.add(track, self.quality.currentData())
+            if isinstance(track, Track):
+                self.controller.add(track, self.quality.currentData())
 
     def add_url(self):
         try:
             country, kind, item = parse_url(self.url.text())
             if kind == "album":
-                self.request_catalog(self.catalog.album, item, country)
+                self.request_catalog(self.catalog.album, item, country, album_title="Album tracks")
             else:
                 self.controller.add(
                     Track(country, item, f"Song {item}"), self.quality.currentData()
@@ -313,9 +342,28 @@ class Window(QMainWindow):
                     self.results = future.result()
                     self.result_list.clear()
                     self.result_list.addItems([track.title for track in self.results])
-                    self.catalog_status.setText(
-                        f"{len(self.results)} songs · double-click to queue"
+                    albums = self.pending_result_kind == "albums"
+                    self.selected_button.setText("Open album" if albums else "Queue selected")
+                    self.selected_button.setEnabled(bool(self.results))
+                    self.all_button.setText(
+                        "Queue album" if self.pending_album_title else "Queue all results"
                     )
+                    self.all_button.setEnabled(bool(self.results) and not albums)
+                    label = "albums" if albums else "songs"
+                    if len(self.results) == 1:
+                        label = label[:-1]
+                    action = "open album" if albums else "queue"
+                    context = self.pending_album_title
+                    self.catalog_status.setText(
+                        f"{context + ' · ' if context else ''}{len(self.results)} {label} · "
+                        + (
+                            f"double-click to {action}"
+                            if self.results
+                            else "try another query/storefront or paste an Apple Music URL"
+                        )
+                    )
+                except PlayerError as exc:
+                    self.catalog_status.setText(str(exc))
                 except Exception:
                     self.catalog_status.setText(
                         "Catalog unavailable. Check network/storefront or paste a song URL."

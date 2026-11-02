@@ -109,3 +109,68 @@ def test_album_ui_open_tracks_queue_and_stale_results(app, tmp_path, monkeypatch
     assert "0 albums" in window.catalog_status.text()
     assert not window.selected_button.isEnabled()
     window.close()
+
+
+def test_br_direct_song_adopts_and_persists_storefront(app, tmp_path, monkeypatch):
+    import json
+
+    from conftest import wait_until
+
+    window = Window(tmp_path / "cache")
+    monkeypatch.setattr(window.controller, "tick", lambda: None)
+    window.results = [Track("us", "99999", "Old US result", "88888")]
+    window.result_list.addItem("Old US result")
+    stale = Future()
+    window.catalog_future = (window.generation, stale)
+    window.url.setText("https://music.apple.com/br/song/still/593614986?")
+    window.add_url()
+    assert window.country.text() == "br"
+    assert window.results == [] and window.result_list.count() == 0
+    assert window.controller.queue[0].track.url == "https://music.apple.com/br/song/593614986"
+    assert json.loads(window.settings_path.read_text())["storefront"] == "br"
+    stale.set_result([Track("us", "99999", "Stale US result")])
+    window.tick()
+    assert window.results == []
+    assert "BR" in window.queue_list.item(0).text()
+
+    calls = []
+
+    def request(endpoint, **params):
+        calls.append((endpoint, params))
+        # Synthetic collection ID; the working song ID comes from the supplied BR URL.
+        return [
+            {
+                "kind": "song",
+                "trackId": 593614986,
+                "collectionId": 12345,
+                "trackName": "Still",
+                "artistName": "Daughter",
+            }
+        ]
+
+    monkeypatch.setattr(window.catalog, "request", request)
+    window.search.setText("daughter still")
+    window.search_catalog()
+    wait_until(lambda: (window.tick(), window.catalog_future is None)[1])
+    assert calls[-1][1]["country"] == "br"
+    window.result_list.setCurrentRow(0)
+    window.browse_album()
+    wait_until(lambda: (window.tick(), window.catalog_future is None)[1])
+    assert calls[-1] == (
+        "lookup",
+        {"id": "12345", "country": "br", "entity": "song", "limit": 200},
+    )
+    assert window.results[0].url == window.controller.queue[0].track.url
+    window.close()
+
+    reopened = Window(tmp_path / "cache")
+    try:
+        assert reopened.country.text() == "br"
+        reopened.country.setText("gb")
+        reopened.country.editingFinished.emit()
+        assert json.loads(reopened.settings_path.read_text())["storefront"] == "gb"
+        reopened.url.setText("https://untrusted.example/br/song/123")
+        reopened.add_url()
+        assert reopened.country.text() == "gb"  # Invalid URLs cannot change settings.
+    finally:
+        reopened.close()

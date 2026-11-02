@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import sys
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -57,6 +58,7 @@ class Window(QMainWindow):
             "device": "auto",
             "limit": 10,
             "backend": "classic",
+            "storefront": "us",
         }
         try:
             saved = json.loads(self.settings_path.read_text())
@@ -65,6 +67,8 @@ class Window(QMainWindow):
                     self.settings[key] = saved[key]
         except (OSError, ValueError, TypeError):
             pass
+        if not re.fullmatch(r"[a-z]{2}", self.settings["storefront"]):
+            self.settings["storefront"] = "us"
         self.cache.limit = max(1, min(1024, self.settings["limit"])) * GIB
         self.controller = Controller(
             self.cache, Mpv(), self.settings["downloader"], self.settings["device"]
@@ -109,11 +113,15 @@ class Window(QMainWindow):
         self.search_kind.addItem("Albums", "album")
         self.search_kind.currentIndexChanged.connect(self.invalidate_search)
         search_row.addWidget(self.search_kind)
-        self.country = QLineEdit("us")
+        search_row.addWidget(QLabel("Storefront"))
+        self.country = QLineEdit(self.settings["storefront"])
         self.country.setMaximumWidth(60)
         self.country.setMaxLength(2)
-        self.country.setToolTip("Two-letter storefront matching your Apple Music account")
+        self.country.setToolTip(
+            "Account storefront (two letters). Opening an Apple Music URL adopts its country."
+        )
         self.country.textChanged.connect(self.invalidate_search)
+        self.country.editingFinished.connect(self.remember_storefront)
         search_row.addWidget(self.country)
         self.button(search_row, "Search", self.search_catalog)
         layout.addLayout(search_row)
@@ -233,6 +241,7 @@ class Window(QMainWindow):
 
     def search_catalog(self):
         if self.search.text().strip():
+            self.remember_storefront()
             self.request_catalog(
                 self.catalog.search,
                 self.search.text(),
@@ -240,6 +249,15 @@ class Window(QMainWindow):
                 self.search_kind.currentData(),
                 result_kind="albums" if self.search_kind.currentData() == "album" else "songs",
             )
+
+    def remember_storefront(self):
+        country = self.country.text().lower()
+        if re.fullmatch(r"[a-z]{2}", country):
+            self.settings["storefront"] = country
+            try:
+                self.save_settings()
+            except OSError:
+                self.controller.error = "Could not save storefront. Check settings permissions."
 
     def browse_album(self):
         row = self.result_list.currentRow()
@@ -270,6 +288,13 @@ class Window(QMainWindow):
     def add_url(self):
         try:
             country, kind, item = parse_url(self.url.text())
+            changed = self.country.text().lower() != country
+            self.country.setText(country)  # Invalidates old results and in-flight requests.
+            self.remember_storefront()
+            if changed:
+                self.catalog_status.setText(
+                    f"Storefront changed to {country.upper()} from URL · search again to browse."
+                )
             if kind == "album":
                 self.request_catalog(self.catalog.album, item, country, album_title="Album tracks")
             else:
@@ -356,6 +381,7 @@ class Window(QMainWindow):
                 "device": self.controller.device,
                 "limit": int(limit.value()),
                 "backend": self.controller.backend,
+                "storefront": self.settings["storefront"],
             }
             try:
                 self.save_settings()
@@ -420,7 +446,10 @@ class Window(QMainWindow):
                 "Cache operation failed. Check permissions/free space and restart the player."
             )
         c = self.controller
-        rows = [f"{e.state} · {e.track.title} · requested {e.quality}" for e in c.queue]
+        rows = [
+            f"{e.state} · {e.track.title} · {e.track.country.upper()} · requested {e.quality}"
+            for e in c.queue
+        ]
         if rows != self.rendered_queue:
             selected = self.queue_list.currentRow()
             self.queue_list.clear()

@@ -53,3 +53,15 @@ launcher uses user/mount/PID namespaces, not a network namespace; both clients
 target `http://127.0.0.1:12340`. amdl's default HTTP client has no total request
 timeout; the player still enforces its 900-second job timeout, independently of
 its 0.5-second status probe. None of these checks exercises an actual account.
+
+A direct BR song URL succeeding while browse results fail exposed a UI mismatch:
+search previously reset to `us`, and pasting a BR URL left the old US results in
+place. The player now saves the storefront and adopts it from validated URLs,
+invalidating prior results/in-flight lookups. Album lookup already propagates the
+selected result's country. Song queue URLs use `trackId`; album lookup uses
+`collectionId`. A regression uses the supplied `/br/song/still/593614986?` URL
+with synthetic collection metadata to verify all three routes produce the same
+BR song URL. Live public lookup was unavailable in the execution environment,
+so this does not establish cross-catalog ID equivalence or every track's
+subscription availability. If a fresh BR result still fails, report that one
+song's public URL for comparison; do not reauthenticate based on this error alone.

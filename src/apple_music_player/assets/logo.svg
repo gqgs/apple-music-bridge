@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64">
+  <title>Player — play and spatial sound</title>
+  <rect x="2" y="2" width="60" height="60" rx="16" fill="#142D3B" stroke="#5EDDC3" stroke-width="2"/>
+  <path d="M19 20 L37 32 L19 44 Z" fill="#FFFFFF" stroke="#FFFFFF" stroke-width="2" stroke-linejoin="round"/>
+  <path d="M40 23 Q49 32 40 41 M47 17 Q62 32 47 47" fill="none" stroke="#5EDDC3" stroke-width="4" stroke-linecap="round"/>
+</svg>

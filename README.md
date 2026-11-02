@@ -1,5 +1,7 @@
 # Apple Music Player
 
+<img src="src/apple_music_player/assets/logo.svg" width="64" height="64" alt="Player logo: white play triangle with mint spatial sound arcs on navy" />
+
 A small native Linux player: search songs, browse albums, queue lossless/Dolby downloads, and play through mpv. Python 3.11+, Qt Widgets, SQLite. No embedded browser.
 
 ```sh
@@ -34,3 +36,5 @@ Start your existing, authenticated [zhaarey/wrapper](https://github.com/zhaarey/
 The app writes a fresh, private per-job downloader config and leaves your existing config/downloads untouched. It disables lyrics, artwork and conversion, closes stdin, and discards all raw downloader output (the pinned CLI can print its configuration). Only a validated final path is accepted. The classic downloader keeps its existing authentication path; managed lite has a separate local setup flow. No account tokens are stored in ordinary app settings.
 
 See [design and validation](docs/design.md). Real Apple downloads, live catalog requests and HDMI output still require local acceptance testing; automated tests use synthetic audio and fake processes.
+
+The original [SVG logo](src/apple_music_player/assets/logo.svg) is bundled as the Qt application/window icon; it scales without additional dependencies. This project is not affiliated with Apple.

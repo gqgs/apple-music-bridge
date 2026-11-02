@@ -15,6 +15,9 @@ dev = ["pytest>=8", "ruff>=0.9"]
 [project.scripts]
 apple-music-player = "apple_music_player.app:main"
 
+[tool.setuptools.package-data]
+apple_music_player = ["assets/*.svg"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 

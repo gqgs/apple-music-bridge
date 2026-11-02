@@ -5,6 +5,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from PySide6.QtCore import Qt, QTimer
+from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import (
     QApplication,
     QComboBox,
@@ -33,10 +34,15 @@ from .playback import Mpv
 GIB = 1024**3
 
 
+def application_icon():
+    return QIcon(str(Path(__file__).parent / "assets" / "logo.svg"))
+
+
 class Window(QMainWindow):
     def __init__(self, root=None):
         super().__init__()
         self.setWindowTitle("Apple Music Player")
+        self.setWindowIcon(application_icon())
         self.resize(980, 740)
         root = (
             root
@@ -360,6 +366,7 @@ class Window(QMainWindow):
 def main():
     app = QApplication(sys.argv)
     app.setApplicationName("apple-music-player")
+    app.setWindowIcon(application_icon())
     try:
         window = Window()
     except PlayerError as exc:

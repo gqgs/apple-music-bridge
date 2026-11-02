@@ -2,8 +2,6 @@
 
 from dataclasses import dataclass
 
-CLASSIC_DOWNLOADER = "12fff0caead84c264abdb02878d43b1773e13368"
-CLASSIC_WRAPPER = "4459548fb3c0f96dcb974755eb4a5a0791fbbc74"
 LITE_WRAPPER = "56a7dcd726f2c2ef1d4420d6747ba0bafe215fee"
 LITE_DOWNLOADER = "452ba0b672d49afffca3f57b0c2c4670a316e2ca"
 LITE_ORIGIN = "https://github.com/WorldObservationLog/wrapper/actions/runs/41407950505"

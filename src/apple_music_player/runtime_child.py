@@ -20,7 +20,7 @@ def main():
     if os.getppid() != parent:
         return 1
     fds = tuple(fd for fd in (lock_fd, args_fd) if fd >= 0)
-    # Stay in the supervisor's new process group, never the independent classic wrapper's.
+    # Stay in the supervisor's new process group, never the unrelated processes'.
     child = subprocess.Popen(sys.argv[4:], pass_fds=fds)
     while child.poll() is None and not stopped and os.getppid() == parent:
         time.sleep(0.1)

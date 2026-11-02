@@ -352,7 +352,7 @@ class ManagedRuntime:
             return
         if self.events.denied.is_set():
             self.stop()
-            self.state = "Host denied namespaces/mounts. Use classic or consult your administrator."
+            self.state = "Host denied namespaces/mounts. Consult your administrator."
             return
         if self.process.poll() is not None:
             if self.reader:
@@ -376,7 +376,7 @@ class ManagedRuntime:
             else:
                 self.stop()
                 self.state = (
-                    "Host denied namespaces/mounts. Use classic or consult your administrator."
+                    "Host denied namespaces/mounts. Consult your administrator."
                     if self.events.denied.is_set()
                     else "Backend exited or login failed. Check host support/account and retry."
                 )

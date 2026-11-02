@@ -40,12 +40,11 @@ def test_ui_stale_search_errors_retry_cancel(app, tmp_path):
     assert window.result_list.count() == 1
     window.result_list.setCurrentRow(0)
     window.add_selected()
-    window.controller.downloader = "/missing/downloader"
     window.controller.tick()
     # Drain the already failed worker through the normal UI tick.
     from conftest import wait_until
 
-    wait_until(lambda: (window.tick(), "not found" in window.status.text())[1])
+    wait_until(lambda: (window.tick(), "not ready" in window.status.text())[1])
     assert window.controller.queue[0].state == "Failed"
     window.controller.retry()
     assert window.controller.queue[0].state == "Queued"
@@ -63,7 +62,12 @@ def test_gui_download_play_smoke(app, tmp_path, fake_downloader, fake_mpv):
     from apple_music_player.playback import Mpv
 
     window = Window(tmp_path / "cache")
-    window.controller.downloader = fake_downloader
+    from types import SimpleNamespace
+
+    window.startup_attempted = True
+    window.controller.runtime = SimpleNamespace(
+        ready=True, store=SimpleNamespace(downloader=fake_downloader)
+    )
     window.controller.player = Mpv(fake_mpv)
     window.results = [Track("us", "12345", "Synthetic tone — Test fixture", "100")]
     window.result_list.addItems([track.title for track in window.results])
@@ -100,11 +104,8 @@ def test_setup_consent_backend_selection_and_no_auto_execution(app, tmp_path):
     assert service.runtime.process is None and service.future is None
     dialog.install()
     assert "explicitly" in service.error and service.future is None
-    dialog.backend.setCurrentIndex(1)
     assert window.controller.backend == "lite"
     assert window.controller.downloader == "apple-music-downloader"
-    dialog.backend.setCurrentIndex(0)
-    assert window.controller.backend == "classic"
     dialog.password.setText("fixture-secret")
     dialog.code.setText("123456")
     dialog.cancel()
@@ -112,7 +113,6 @@ def test_setup_consent_backend_selection_and_no_auto_execution(app, tmp_path):
     from conftest import wait_until
 
     wait_until(lambda: (service.tick(), service.future is None)[1])
-    dialog.backend.setCurrentIndex(1)
     screenshot = os.environ.get("PLAYER_SETUP_SCREENSHOT")
     if screenshot:
         dialog.refresh()
@@ -121,3 +121,23 @@ def test_setup_consent_backend_selection_and_no_auto_execution(app, tmp_path):
     service.close()
     window.close()
     app.processEvents()
+
+
+def test_legacy_settings_migrate_without_start_or_external_deletion(app, tmp_path):
+    import json
+
+    root = tmp_path / "cache"
+    root.mkdir()
+    external = tmp_path / "old-wrapper"
+    external.write_text("untouched fixture")
+    (root / "settings.json").write_text(
+        json.dumps({"backend": "classic", "downloader": str(external), "storefront": "us"})
+    )
+    window = Window(root)
+    app.processEvents()
+    assert window.controller.backend == "lite" and window.setup_service is None
+    assert window.country.text() == "us"
+    window.save_settings()
+    assert json.loads((root / "settings.json").read_text())["backend"] == "classic"
+    window.close()
+    assert external.read_text() == "untouched fixture"

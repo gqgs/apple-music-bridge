@@ -38,7 +38,8 @@ def fake_downloader(tmp_path, audio, monkeypatch):
     path.write_text("""#!/usr/bin/env python3
 import json, os, shutil, pathlib, sys, time, subprocess
 config = json.loads(pathlib.Path("config.yaml").read_text())
-assert config["exit-on-error"] and not config["embed-lrc"]
+assert config["general"]["exit-on-error"] and not config["metadata"]["lyrics"]["embed"]
+assert "--config" in sys.argv
 assert "--json" in sys.argv
 print("Config: token=TEST_SECRET_DO_NOT_LEAK", flush=True)
 mode = os.environ.get("TEST_MODE", "ok")
@@ -51,7 +52,7 @@ if mode == "zero":
 if mode == "malformed":
     print("[malformed secret TEST_SECRET_DO_NOT_LEAK")
     sys.exit(0)
-output = pathlib.Path(config["alac-save-folder"]) / "track.m4a"
+output = pathlib.Path(config["paths"]["alac"]) / "track.m4a"
 if mode == "symlink":
     output.symlink_to(os.environ["TEST_AUDIO"])
 else:

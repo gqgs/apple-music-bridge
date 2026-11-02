@@ -77,10 +77,9 @@ class Window(QMainWindow):
         if self.settings_path.is_symlink():
             raise PlayerError("Settings file must not be a symlink.")
         self.settings = {
-            "downloader": "apple-music-downloader",
             "device": "auto",
             "limit": 10,
-            "backend": "classic",
+            "backend": "lite",
             "storefront": "br",
         }
         try:
@@ -93,11 +92,9 @@ class Window(QMainWindow):
         if not re.fullmatch(r"[a-z]{2}", self.settings["storefront"]):
             self.settings["storefront"] = "br"
         self.cache.limit = max(1, min(1024, self.settings["limit"])) * GIB
-        self.controller = Controller(
-            self.cache, Mpv(), self.settings["downloader"], self.settings["device"]
-        )
+        self.controller = Controller(self.cache, Mpv(), device=self.settings["device"])
         self.controller.on_played = self.history.record
-        self.controller.backend = "lite" if self.settings.get("backend") == "lite" else "classic"
+        self.legacy_setup = self.settings.get("backend") != "lite"
         self.setup_service = None
         self.closing = False
         self.startup_attempted = False
@@ -415,7 +412,7 @@ class Window(QMainWindow):
 
     def start_saved_backend(self):
         # Exactly once per window startup; never called from the polling loop.
-        if self.closing or self.startup_attempted or self.controller.backend != "lite":
+        if self.closing or self.startup_attempted or self.legacy_setup:
             return
         self.startup_attempted = True
         try:
@@ -602,7 +599,6 @@ class Window(QMainWindow):
         dialog = QDialog(self)
         dialog.setWindowTitle("Player settings")
         form = QFormLayout(dialog)
-        downloader = QLineEdit(self.controller.downloader)
         device = QLineEdit(self.controller.device)
         device.setPlaceholderText("auto, or alsa/hdmi:CARD=HDMI,DEV=3")
         limit = QDoubleSpinBox()
@@ -610,7 +606,6 @@ class Window(QMainWindow):
         limit.setRange(1, 1024)
         limit.setValue(self.cache.limit / GIB)
         limit.setSuffix(" GiB")
-        form.addRow("Downloader executable", downloader)
         form.addRow("mpv audio device", device)
         form.addRow(
             QLabel(
@@ -622,7 +617,7 @@ class Window(QMainWindow):
         form.addRow(
             QLabel(
                 "Plus up to 2 GiB staging per download; brief overshoot is possible.\n"
-                "The independent wrapper must already be running on ports 10020/20020."
+                "Configure the managed service in Backend setup."
             )
         )
         buttons = QDialogButtonBox(QDialogButtonBox.Save | QDialogButtonBox.Cancel)
@@ -630,14 +625,12 @@ class Window(QMainWindow):
         buttons.rejected.connect(dialog.reject)
         form.addRow(buttons)
         if dialog.exec() == QDialog.Accepted:
-            self.controller.downloader = downloader.text().strip()
             self.controller.device = device.text().strip() or "auto"
             self.cache.limit = int(limit.value()) * GIB
             self.settings = {
-                "downloader": self.controller.downloader,
                 "device": self.controller.device,
                 "limit": int(limit.value()),
-                "backend": self.controller.backend,
+                "backend": self.settings["backend"],
                 "storefront": self.settings["storefront"],
             }
             try:
@@ -655,18 +648,13 @@ class Window(QMainWindow):
         if not self.country.text() and not self.country.hasFocus() and self.backend_storefront():
             self.adopt_backend_storefront()
         self.show_storefront()
-        if self.controller.backend == "lite":
-            service = self.setup_service
-            text = "Managed service not started · open Backend setup"
-            if service:
-                text = (
-                    "Stopping managed service" if service.stop_requested else service.runtime.state
-                )
-                if service.error:
-                    text += " · " + service.error
-            self.backend_status.setText(text)
-        else:
-            self.backend_status.setText("External classic backend")
+        service = self.setup_service
+        text = "Managed service not started · open Backend setup"
+        if service:
+            text = "Stopping managed service" if service.stop_requested else service.runtime.state
+            if service.error:
+                text += " · " + service.error
+        self.backend_status.setText(text)
         if self.catalog_future and self.catalog_future[1].done():
             generation, future = self.catalog_future
             self.catalog_future = None

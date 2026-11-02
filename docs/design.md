@@ -24,10 +24,10 @@ No live catalog request was made in the implementation environment: its destinat
 
 ## Small local acceptance check
 
-With your known-good wrapper running, set the downloader executable and play a known song in Lossless mode. Verify ALAC, bit depth/sample rate, pause/seek and a second queued track. Then choose your known-good HDMI device, queue an Atmos version and verify the soundbar's own Atmos indication. Confirm the UI reports the actual codec/JOC status and that unplugging HDMI produces an error rather than claiming successful passthrough. Try a public catalog search and album browse in your storefront. Cancel a download and Retry, then relaunch and replay a cached track.
+After managed Backend setup, play a known song in Lossless mode. Verify ALAC, bit depth/sample rate, pause/seek and a second queued track. Then choose your known-good HDMI device, queue an Atmos version and verify the soundbar's own Atmos indication. Confirm the UI reports the actual codec/JOC status and that unplugging HDMI produces an error rather than claiming successful passthrough. Try a public catalog search and album browse in your storefront. Cancel a download and Retry, then relaunch and replay a cached track.
 
 ## Interface references
 
-- [Pinned downloader CLI/config](https://github.com/zhaarey/apple-music-downloader/tree/12fff0caead84c264abdb02878d43b1773e13368): `main.go`, `config.yaml.example`.
+- [Pinned downloader CLI/config](https://github.com/zhaarey/apple-music-downloader/tree/452ba0b672d49afffca3f57b0c2c4670a316e2ca): `main.go`, `config.yaml.example`.
 - [Apple public Search/Lookup API](https://performance-partners.apple.com/search-api).
 - [mpv manual](https://mpv.io/manual/stable/): JSON IPC, audio-spdif, audio-params and audio-out-params. Forcing spdif with `--ad` is not supported; the app uses audio-spdif and observes the resulting format.

@@ -301,7 +301,7 @@ def test_health_schema_never_authentication(monkeypatch):
     assert health_status() is False
 
 
-def test_lite_contract_and_classic_selection(tmp_path, audio, monkeypatch):
+def test_lite_contract_and_missing_service(tmp_path, audio, monkeypatch):
     binary = tmp_path / "fake-lite-downloader"
     binary.write_text("""#!/usr/bin/env python3
 import json, os, pathlib, shutil, sys
@@ -332,11 +332,11 @@ print(json.dumps([{"path": str(path), "artist": "Fixture", "artist_id": "42",
     config = lite_job_config(stage, "gb")
     assert "alac-save-folder" not in config
     cache = Cache(tmp_path / "cache", 1000)
-    c = Controller(cache, Mpv(), "classic-executable")
+    c = Controller(cache, Mpv(), "unused-executable")
     c.backend = "lite"
     c.add(Track("us", "12345", "Fixture"), "lossless")
     c.tick()
-    assert "Backend setup" in c.error and c.downloader == "classic-executable"
+    assert "Backend setup" in c.error and c.downloader == "unused-executable"
     assert c.future is None
     c.close()
 

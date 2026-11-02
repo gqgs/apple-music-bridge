@@ -187,6 +187,9 @@ def test_queue_download_play_dedup_prefetch(tmp_path, fake_downloader, fake_mpv)
     cache = Cache(tmp_path / "cache", 1_000_000)
     player = Mpv(fake_mpv)
     c = Controller(cache, player, fake_downloader)
+    from types import SimpleNamespace
+
+    c.runtime = SimpleNamespace(ready=True, store=SimpleNamespace(downloader=fake_downloader))
     c.add(TRACK, "lossless")
     c.add(TRACK, "lossless")
     c.add(Track("us", "2", "Next"), "lossless")
@@ -256,6 +259,11 @@ def test_cancel_retry_and_removed_job_not_committed(
 ):
     cache = Cache(tmp_path / "cache", 1_000_000)
     controller = Controller(cache, Mpv(fake_mpv), fake_downloader)
+    from types import SimpleNamespace
+
+    controller.runtime = SimpleNamespace(
+        ready=True, store=SimpleNamespace(downloader=fake_downloader)
+    )
     monkeypatch.setenv("TEST_MODE", "hang")
     pidfile = tmp_path / "pid"
     monkeypatch.setenv("TEST_PID", str(pidfile))

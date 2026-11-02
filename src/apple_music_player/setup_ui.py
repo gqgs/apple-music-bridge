@@ -8,7 +8,6 @@ from PySide6.QtCore import QObject, Qt, QTimer, QUrl
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QCheckBox,
-    QComboBox,
     QDialog,
     QFileDialog,
     QFormLayout,
@@ -125,13 +124,9 @@ class SetupDialog(QDialog):
         self.setWindowTitle("Backend setup")
         self.resize(680, 560)
         form = QFormLayout(self)
-        self.backend = QComboBox()
-        self.backend.addItem("External classic — existing setup", "classic")
-        self.backend.addItem("Managed rootless lite — Linux x86_64", "lite")
-        self.backend.setCurrentIndex(1 if controller.backend == "lite" else 0)
-        self.backend.currentIndexChanged.connect(self.select_backend)
-        form.addRow("Playback backend", self.backend)
-        missing = [x for x in ("mpv", "ffprobe", "ffmpeg", "MP4Box") if not shutil.which(x)]
+        form.addRow(QLabel("Managed rootless lite · Linux x86_64"))
+        self.controller.runtime = service.runtime
+        missing = [x for x in ("mpv", "ffprobe") if not shutil.which(x)]
         deps = "Missing: " + ", ".join(missing) if missing else "Media dependencies found"
         self.requirements = QLabel(
             deps
@@ -211,16 +206,6 @@ class SetupDialog(QDialog):
         self.timer.timeout.connect(self.refresh)
         self.timer.start(200)
         self.refresh()
-
-    def select_backend(self):
-        if self.controller.future:
-            self.service.error = "Cancel or finish the active download before switching backends."
-            self.backend.blockSignals(True)
-            self.backend.setCurrentIndex(1 if self.controller.backend == "lite" else 0)
-            self.backend.blockSignals(False)
-            return
-        self.controller.backend = self.backend.currentData()
-        self.controller.runtime = self.service.runtime
 
     def install(self):
         if not self.consent.isChecked():

@@ -23,7 +23,7 @@ class Controller:
     def __init__(self, cache, player, downloader="apple-music-downloader", device="auto"):
         self.cache, self.player = cache, player
         self.downloader, self.device = downloader, device
-        self.backend = "classic"
+        self.backend = "lite"
         self.runtime = None
         self.queue = []
         self.executor = ThreadPoolExecutor(max_workers=1)

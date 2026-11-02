@@ -105,6 +105,8 @@ class Controller:
                     self.current.state = (
                         "Paused" if self.player.properties.get("pause") else "Playing"
                     )
+                else:
+                    self.current.state = "Waiting for audio output"
             except PlayerError as exc:
                 self.error = str(exc)
                 self.player.close()

@@ -273,3 +273,62 @@ def test_cancel_retry_and_removed_job_not_committed(
     assert not controller.queue
     assert not controller.player.process
     controller.close()
+
+
+@pytest.mark.parametrize("name", ["audio-params", "audio-out-params"])
+@pytest.mark.parametrize("paused", [False, True])
+def test_output_changes_revoke_and_restore_without_resume(name, paused):
+    import json
+    import time
+    from unittest.mock import Mock
+
+    player = Mpv()
+    player.process = Mock()
+    player.process.poll.return_value = None
+    player.socket = Mock()
+    player.socket.recv.side_effect = TimeoutError
+    player.started = time.monotonic()
+    player.passthrough = True
+    player.command = Mock()
+
+    def emit(prop, data):
+        player.buffer += (
+            json.dumps({"event": "property-change", "name": prop, "data": data}).encode() + b"\n"
+        )
+        player.poll()
+
+    emit("audio-params", {"format": "spdif-eac3"})
+    assert not player.output_verified
+    emit("audio-out-params", {"format": "spdif-eac3"})
+    assert player.output_verified
+    player.command.assert_called_once_with("set_property", "pause", False)
+    emit("pause", paused)
+    player.command.reset_mock()
+
+    # Valid updates after startup must not override the user's pause state.
+    emit(name, {"format": "spdif-eac3", "samplerate": 192000})
+    player.command.assert_not_called()
+    assert player.properties["pause"] is paused
+
+    emit(name, None)
+    assert not player.output_verified
+    assert "passthrough active" not in player.output_label
+    assert "unavailable" in player.output_label
+    player.command.assert_called_once_with("set_property", "pause", True)
+    emit("pause", True)
+    player.command.reset_mock()
+
+    # Repeated missing updates remain paused; restored params re-enable controls,
+    # but only an explicit user action may resume after this interruption.
+    emit(name, None)
+    emit(name, {"format": "spdif-eac3"})
+    assert player.output_verified and player.properties["pause"] is True
+    assert "passthrough active" in player.output_label
+    player.command.assert_not_called()
+
+    emit("pause", paused)
+    with pytest.raises(PlayerError, match="fell back"):
+        emit(name, {"format": "s16"})
+    assert not player.output_verified
+    assert "passthrough active" not in player.output_label
+    player.command.assert_called_once_with("set_property", "pause", True)

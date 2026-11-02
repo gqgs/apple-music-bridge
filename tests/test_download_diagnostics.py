@@ -22,8 +22,34 @@ from apple_music_player.model import PlayerError, Track
         ("Failed to rip song: 404 Not Found", "catalog-404"),
         ("Failed to rip album: 429 Too Many Requests", "catalog-429"),
         ("Failed to rip song: PRIVATE_PAYLOAD", "catalog"),
-        ("Error connecting to lite-server: PRIVATE_PAYLOAD", "wrapper"),
-        ("Warning: failed to query lite-server /status: PRIVATE_PAYLOAD", "wrapper"),
+        ("Error connecting to lite-server: PRIVATE_PAYLOAD", "wrapper-m3u8-unknown"),
+        ("Warning: failed to query lite-server /status: PRIVATE_PAYLOAD", "wrapper-status-unknown"),
+        (
+            "Error connecting to lite-server: "
+            "lite-server /m3u8 returned code=404 msg=PRIVATE_PAYLOAD",
+            "wrapper-m3u8-api-404",
+        ),
+        (
+            "Error connecting to lite-server: "
+            "lite-server /m3u8 returned 404 Not Found: PRIVATE_PAYLOAD",
+            "wrapper-m3u8-http-404",
+        ),
+        (
+            "Error connecting to lite-server: "
+            'Get "http://127.0.0.1:12340/m3u8?adamId=PRIVATE_PAYLOAD": '
+            "dial tcp 127.0.0.1:12340: connect: connection refused",
+            "wrapper-m3u8-refused",
+        ),
+        (
+            'Warning: failed to query lite-server /status: Get "http://127.0.0.1:12340/status": '
+            "context deadline exceeded (Client.Timeout exceeded while awaiting headers)",
+            "wrapper-status-timeout",
+        ),
+        (
+            "Warning: failed to query lite-server /status: invalid character PRIVATE_PAYLOAD",
+            "wrapper-status-invalid-response",
+        ),
+        ("Received an empty response", "wrapper-m3u8-empty"),
         ("⚠ Failed to extract info from manifest: PRIVATE_PAYLOAD", "manifest"),
         ("Failed to run v4: PRIVATE_PAYLOAD\nError detected, exiting...", "download"),
         ("Defragment failed: PRIVATE_PAYLOAD", "finalize"),
@@ -70,3 +96,24 @@ def test_non_error_payload_and_stderr_cannot_supply_media():
     summary.feed(b'[{"path":"/outside", "song":"PRIVATE_PAYLOAD"}]\n')
     assert summary.path is None and summary.error is None
     assert "PRIVATE_PAYLOAD" not in repr(vars(summary))
+
+
+def test_wrapper_application_error_is_not_connection_failure(tmp_path):
+    # Exact error shape asserted by upstream internal/wrapper/wrapper_test.go;
+    # lite_main.cpp returns this application failure with HTTP 200.
+    binary = tmp_path / "amdl-fixture"
+    binary.write_text("""#!/usr/bin/env python3
+print("lite-server regions: [us]")
+print("Error connecting to lite-server: lite-server /m3u8 returned code=404 msg=PRIVATE_PAYLOAD")
+print("null")
+""")
+    binary.chmod(0o700)
+    stage = tmp_path / "stage"
+    stage.mkdir()
+    with pytest.raises(PlayerError, match=r"\[wrapper-m3u8-api-404\]") as error:
+        Downloader(str(binary), stage, backend="lite").run(
+            Track("us", "12345", "Fixture"), "lossless", threading.Event()
+        )
+    assert "service was reached" in str(error.value)
+    assert "PRIVATE_PAYLOAD" not in str(error.value)
+    assert not list(stage.iterdir())

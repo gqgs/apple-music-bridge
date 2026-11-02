@@ -35,3 +35,21 @@ fragmented lines, zero/nonzero exits, nested album output paths and synthetic
 audio. No proprietary runtime or account is executed. The reported real-user
 download failure is not yet reproduced: its new category is needed before
 claiming a root cause or changing authentication.
+
+The original `[wrapper]` category combined status/manifest failures. It now
+reports the endpoint and separates `api` (application envelope code), `http`
+(HTTP status), `refused`, `timeout`, `invalid-response`, `empty`, and `unknown`.
+Only allowlisted endpoints, codes and fixed messages are retained. In particular,
+`wrapper-m3u8-api-404` means the service responded but could not provide a
+manifest; it does **not** mean connection refusal or prove expired credentials.
+This matches the pinned wrapper's `handle_m3u8` and amdl's
+`internal/wrapper/wrapper_test.go` application-error test. `/status` uses only
+the saved storefront and can succeed while `/m3u8` fails. The setup screen now
+says “Service reachable · local session saved; media access not yet verified”.
+
+Lifecycle review and a fake-process Qt regression verify that closing the setup
+dialog leaves the service and its app-owned health timer running. The rootless
+launcher uses user/mount/PID namespaces, not a network namespace; both clients
+target `http://127.0.0.1:12340`. amdl's default HTTP client has no total request
+timeout; the player still enforces its 900-second job timeout, independently of
+its 0.5-second status probe. None of these checks exercises an actual account.

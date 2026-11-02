@@ -367,7 +367,7 @@ class ManagedRuntime:
             if healthy:
                 self.last_healthy = time.monotonic()
                 self.state = (
-                    "Ready · locally signed in; account validity checked on download"
+                    "Service reachable · local session saved; media access not yet verified"
                     if self.ready
                     else "Running · authentication not verified; sign in locally"
                 )

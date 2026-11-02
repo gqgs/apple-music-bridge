@@ -32,6 +32,68 @@ DIAGNOSTICS = {
     "unavailable": "The requested track/format is unavailable. Try another song or quality.",
     "proxy": "Downloader network configuration failed. Report this category.",
 }
+
+# The pinned wrapper returns HTTP 200 even for application errors (e.g. a
+# missing manifest is {code: 404, ...}). Distinguish those from HTTP/transport
+# failures without keeping the upstream message, response body or request URL.
+for _endpoint in ("status", "m3u8", "key"):
+    for _kind in ("api", "http"):
+        for _code in (400, 401, 403, 404, 429, 500, 502, 503, 504):
+            DIAGNOSTICS[f"wrapper-{_endpoint}-{_kind}-{_code}"] = (
+                f"Local lite /{_endpoint} returned "
+                f"{'application code' if _kind == 'api' else 'HTTP status'} {_code}. "
+                + (
+                    "The service was reached but could not provide this song's manifest. "
+                    "Check the song/storefront; this alone does not prove expired login."
+                    if _endpoint == "m3u8" and _kind == "api" and _code == 404
+                    else "The service was reached; this is not a connection-refused error. "
+                    "Report this category and storefront."
+                )
+            )
+    for _kind, _message in {
+        "refused": "Connection was refused. Check whether the managed service is still running.",
+        "timeout": "The request timed out. Check Backend setup status and retry.",
+        "invalid-response": "Response does not match the JSON contract. Report this category.",
+        "unknown": "The request failed; its private details were discarded. Report this category.",
+    }.items():
+        DIAGNOSTICS[f"wrapper-{_endpoint}-{_kind}"] = f"Local lite /{_endpoint}: {_message}"
+DIAGNOSTICS["wrapper-m3u8-empty"] = (
+    "The local lite API returned an empty manifest. Check the song/storefront. "
+    "This alone does not prove expired login."
+)
+
+
+def wrapper_category(detail, endpoint):
+    match = re.match(
+        rb"lite-server /(status|m3u8|key) returned (code=)?"
+        rb"(400|401|403|404|429|500|502|503|504)(?:\s|:|$)",
+        detail,
+    )
+    if match:
+        endpoint = match[1].decode("ascii")
+        kind = "api" if match[2] else "http"
+        return f"wrapper-{endpoint}-{kind}-{match[3].decode('ascii')}"
+    # Only recognize transport errors for the configured loopback endpoint.
+    transport = re.match(
+        rb'Get "http://127\.0\.0\.1:12340/(status|m3u8|key)(?:\?[^"\r\n]*)?": (.*)',
+        detail,
+    )
+    if transport:
+        endpoint = transport[1].decode("ascii")
+        if transport[2] == b"dial tcp 127.0.0.1:12340: connect: connection refused":
+            return f"wrapper-{endpoint}-refused"
+        if any(
+            value in transport[2]
+            for value in (b"context deadline exceeded", b"i/o timeout", b"Client.Timeout")
+        ):
+            return f"wrapper-{endpoint}-timeout"
+    if detail.startswith(
+        (b"invalid character ", b"json: cannot unmarshal", b"unexpected end of JSON")
+    ):
+        return f"wrapper-{endpoint}-invalid-response"
+    return f"wrapper-{endpoint}-unknown"
+
+
 ERROR_PREFIXES = (
     (b"load Config failed:", "config"),
     (b"proxy config error:", "proxy"),
@@ -79,11 +141,16 @@ class Summary:
                 return
         if line == b"Unavailable":
             self.error = self.error or "unavailable"
-        elif line.startswith(
-            (b"Warning: failed to query lite-server /status:", b"Error connecting to lite-server:")
-        ):
-            # These can recover; report only if the job ultimately has no media.
-            self.warning = "wrapper"
+        elif line == b"Received an empty response":
+            self.warning = "wrapper-m3u8-empty"
+        else:
+            for prefix, endpoint in (
+                (b"Warning: failed to query lite-server /status: ", "status"),
+                (b"Error connecting to lite-server: ", "m3u8"),
+            ):
+                if line.startswith(prefix):
+                    # Recoverable warnings: never reject a valid completed file.
+                    self.warning = wrapper_category(line[len(prefix) :], endpoint)
 
     def feed(self, chunk):
         for segment in chunk.splitlines(keepends=True):

@@ -222,7 +222,7 @@ def test_login_two_factor_cancel_restore_and_ready(installed, monkeypatch):
         assert p.stat().st_mode & 0o077 == 0
     runtime.start()
     wait_until(lambda: (runtime.poll(), runtime.ready)[1])
-    assert "account validity checked on download" in runtime.state
+    assert "media access not yet verified" in runtime.state
     runtime.stop()
     assert not runtime.ready and runtime.process is None
 
@@ -517,3 +517,36 @@ def test_fragmented_upstream_prompt_is_received_without_pipe_eof():
     finally:
         os.close(write_fd)
         reader.join(timeout=2)
+
+
+def test_closing_setup_preserves_service_and_polling(app, installed, tmp_path, monkeypatch):
+    from apple_music_player.app import Window
+    from apple_music_player.setup_ui import SetupDialog, SetupService
+
+    window = Window(tmp_path / "cache")
+    service = SetupService(window, tmp_path / "unused-runtime")
+    service.runtime.close()
+    service.runtime = ManagedRuntime(installed)
+    runtime = service.runtime
+    for name in (".player-login-ok", "DEV_TOKEN", "MUSIC_TOKEN", "STOREFRONT_ID"):
+        (runtime.data / name).write_text("synthetic-session")
+    monkeypatch.setattr("apple_music_player.runtime.health_status", lambda: True)
+    dialog = SetupDialog(service, window.controller, window)
+    try:
+        runtime.start()
+        wait_until(lambda: (runtime.poll(), runtime.ready)[1])
+        process = runtime.process
+        dialog.show()
+        dialog.accept()
+        app.processEvents()
+        assert service.timer.isActive()
+        assert not runtime.cancel.is_set()
+        service.tick()
+        wait_until(lambda: service.future.done())
+        service.finish_completed()
+        assert runtime.process is process and process.poll() is None
+        assert runtime.ready and runtime.signed_in()
+        assert "media access not yet verified" in runtime.state
+    finally:
+        service.close()
+        window.close()

@@ -42,7 +42,11 @@ def test_album_search_contract_and_lookup(monkeypatch):
 
     monkeypatch.setattr(catalog, "request", request)
     albums = catalog.search("daughter if you leave", "gb", "album")
-    assert albums == [Album("gb", "12345", "If You Leave — Daughter")]
+    assert albums == [
+        Album(
+            "gb", "12345", "If You Leave — Daughter", artist="Daughter", album_title="If You Leave"
+        )
+    ]
     assert calls[-1] == (
         "search",
         {
@@ -203,6 +207,7 @@ def test_qt_backend_storefront_choice_search_and_queue(app, tmp_path, monkeypatc
         return [ALBUM] if endpoint == "search" else [ALBUM, *SONGS]
 
     monkeypatch.setattr(window.catalog, "request", request)
+    window.pages.setCurrentIndex(1)
     window.show()
     window.tick()
     app.processEvents()

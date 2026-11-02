@@ -12,6 +12,7 @@ class Entry:
     track: Track
     quality: str
     state: str = "Queued"
+    recorded: bool = False
 
     @property
     def key(self):
@@ -33,6 +34,7 @@ class Controller:
         self.media = None
         self.error = ""
         self.stopped = False
+        self.on_played = None
 
     def add(self, track, quality):
         if self.reject_storefront(track):
@@ -122,6 +124,17 @@ class Controller:
                     self.current.state = (
                         "Paused" if self.player.properties.get("pause") else "Playing"
                     )
+                    if (
+                        not self.current.recorded
+                        and self.current.state == "Playing"
+                        and (self.player.properties.get("time-pos") or 0) > 0
+                    ):
+                        self.current.recorded = True
+                        if self.on_played:
+                            try:
+                                self.on_played(self.current.track)
+                            except Exception:
+                                self.error = "Local listening history could not be saved."
                 else:
                     self.current.state = "Waiting for audio output"
             except PlayerError as exc:

@@ -12,6 +12,16 @@ class Album:
     country: str
     id: str
     title: str
+    artist: str = ""
+    artist_id: str = ""
+    album_title: str = ""
+    artwork_url: str = ""
+    release_date: str = ""
+    store_url: str = ""
+
+    @property
+    def url(self):
+        return f"https://itunes.apple.com/{self.country}/album/id{self.id}"
 
 
 @dataclass(frozen=True)
@@ -20,6 +30,28 @@ class Track:
     id: str
     title: str
     album_id: str = ""
+    artist: str = ""
+    artist_id: str = ""
+    album_title: str = ""
+    artwork_url: str = ""
+    release_date: str = ""
+    store_url: str = ""
+
+    @property
+    def album(self):
+        if not self.album_id:
+            return None
+        return Album(
+            self.country,
+            self.album_id,
+            f"{self.album_title or 'Album ' + self.album_id} — {self.artist}",
+            self.artist,
+            self.artist_id,
+            self.album_title,
+            self.artwork_url,
+            self.release_date,
+            self.store_url,
+        )
 
     @property
     def url(self):

@@ -3,23 +3,33 @@
 import json
 import re
 import time
+from email.utils import parsedate_to_datetime
+from urllib.error import HTTPError
 from urllib.parse import urlencode
 from urllib.request import urlopen
 
 from .model import Album, PlayerError, Track
 
 
+class CatalogDeferred(Exception):
+    def __init__(self, seconds, rate_limited=False):
+        self.seconds = seconds
+        self.rate_limited = rate_limited
+
+
 class Catalog:
     def __init__(self):
         self.last_request = 0.0
         self.responses = {}
+        self.not_before = 0.0
 
     def request(self, endpoint, **params):
         key = endpoint + "?" + urlencode(params)
         if key in self.responses:
             return self.responses[key]
-        if time.monotonic() - self.last_request < 3:
-            raise PlayerError("Please wait three seconds between catalog requests.")
+        delay = max(self.last_request + 3, self.not_before) - time.monotonic()
+        if delay > 0:
+            raise CatalogDeferred(delay)
         self.last_request = time.monotonic()
         try:
             with urlopen("https://itunes.apple.com/" + key, timeout=15) as response:
@@ -29,6 +39,26 @@ class Catalog:
             data = json.loads(payload)["results"]
             if not isinstance(data, list):
                 raise ValueError()
+        except HTTPError as exc:
+            if exc.code == 429:
+                value = (exc.headers.get("Retry-After", "") or "")[:128]
+                delay = 3.0
+                try:
+                    delay = (
+                        float(value)
+                        if value.isdigit()
+                        else (parsedate_to_datetime(value).timestamp() - time.time())
+                    )
+                except (ValueError, TypeError, OverflowError):
+                    pass
+                delay = max(3.0, delay)
+                self.not_before = time.monotonic() + delay
+                exc.close()
+                raise CatalogDeferred(delay, rate_limited=True) from None
+            exc.close()
+            raise PlayerError(
+                "Catalog request failed. Try again later or paste a song URL."
+            ) from None
         except Exception:
             raise PlayerError(
                 "Catalog unavailable. Check your network/storefront or paste a song URL."

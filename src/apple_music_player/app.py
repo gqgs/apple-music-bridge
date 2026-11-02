@@ -27,7 +27,7 @@ from PySide6.QtWidgets import (
 )
 
 from .cache import Cache
-from .catalog import Catalog
+from .catalog import Catalog, CatalogDeferred
 from .controller import Controller
 from .model import Album, PlayerError, Track, parse_url
 from .playback import Mpv
@@ -58,7 +58,7 @@ class Window(QMainWindow):
             "device": "auto",
             "limit": 10,
             "backend": "classic",
-            "storefront": "",
+            "storefront": "br",
         }
         try:
             saved = json.loads(self.settings_path.read_text())
@@ -68,7 +68,7 @@ class Window(QMainWindow):
         except (OSError, ValueError, TypeError):
             pass
         if not re.fullmatch(r"[a-z]{2}", self.settings["storefront"]):
-            self.settings["storefront"] = ""
+            self.settings["storefront"] = "br"
         self.cache.limit = max(1, min(1024, self.settings["limit"])) * GIB
         self.controller = Controller(
             self.cache, Mpv(), self.settings["downloader"], self.settings["device"]
@@ -80,6 +80,11 @@ class Window(QMainWindow):
         self.catalog = Catalog()
         self.catalog_pool = ThreadPoolExecutor(max_workers=1)
         self.catalog_future = None
+        self.catalog_request = None
+        self.catalog_retries = 0
+        self.catalog_timer = QTimer(self)
+        self.catalog_timer.setSingleShot(True)
+        self.catalog_timer.timeout.connect(self.resume_catalog)
         self.generation = 0
         self.results = []
         self.pending_result_kind = "songs"
@@ -111,6 +116,7 @@ class Window(QMainWindow):
         self.search_kind = QComboBox()
         self.search_kind.addItem("Songs", "song")
         self.search_kind.addItem("Albums", "album")
+        self.search_kind.setCurrentIndex(1)
         self.search_kind.currentIndexChanged.connect(self.invalidate_search)
         search_row.addWidget(self.search_kind)
         search_row.addWidget(QLabel("Storefront"))
@@ -234,19 +240,31 @@ class Window(QMainWindow):
         row.addWidget(button)
         return button
 
-    def invalidate_search(self):
+    def invalidate_search(self, *_, clear=False):
         self.generation += 1
-        self.results = []
-        self.result_list.clear()
-        self.selected_button.setEnabled(False)
-        self.all_button.setEnabled(False)
+        self.catalog_timer.stop()
+        self.catalog_request = None
+        if self.catalog_future:
+            self.catalog_future[1].cancel()
+            self.catalog_future = None
+        if clear:
+            self.results = []
+            self.result_list.clear()
+            self.selected_button.setEnabled(False)
+            self.all_button.setEnabled(False)
 
     def request_catalog(self, operation, *args, result_kind="songs", album_title=""):
         self.invalidate_search()
         self.pending_result_kind = result_kind
         self.pending_album_title = album_title
-        if self.catalog_future:
-            self.catalog_future[1].cancel()
+        self.catalog_request = (operation, args)
+        self.catalog_retries = 0
+        self.resume_catalog()
+
+    def resume_catalog(self):
+        if self.closing or self.catalog_request is None:
+            return
+        operation, args = self.catalog_request
         self.catalog_future = (self.generation, self.catalog_pool.submit(operation, *args))
         self.catalog_status.setText("Loading catalog…")
 
@@ -270,7 +288,7 @@ class Window(QMainWindow):
             self.controller.error = "Could not save storefront. Check settings permissions."
 
     def storefront_changed(self):
-        self.invalidate_search()
+        self.invalidate_search(clear=True)
         self.remember_storefront()
         self.show_storefront()
 
@@ -477,6 +495,21 @@ class Window(QMainWindow):
                             else "try another query/storefront or paste an Apple Music URL"
                         )
                     )
+                except CatalogDeferred as exc:
+                    if exc.rate_limited:
+                        self.catalog_retries += 1
+                    if self.catalog_retries > 2 or exc.seconds > 60:
+                        self.catalog_request = None
+                        self.catalog_status.setText(
+                            "Catalog rate limit persists. Try again later; results are kept."
+                        )
+                    else:
+                        self.catalog_status.setText(
+                            "Catalog rate limited · retrying automatically…"
+                            if exc.rate_limited
+                            else "Waiting for catalog request spacing…"
+                        )
+                        self.catalog_timer.start(max(1, int(exc.seconds * 1000) + 1))
                 except PlayerError as exc:
                     self.catalog_status.setText(str(exc))
                 except Exception:
@@ -522,6 +555,7 @@ class Window(QMainWindow):
 
     def closeEvent(self, event):
         self.closing = True
+        self.invalidate_search()
         self.timer.stop()
         self.catalog_pool.shutdown(wait=False, cancel_futures=True)
         self.controller.close()

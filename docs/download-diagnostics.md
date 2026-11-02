@@ -69,7 +69,7 @@ song's public URL for comparison; do not reauthenticate based on this error alon
 Starting directly in search could still reuse a saved US choice without opening
 that BR URL. The UI now prominently compares the selected storefront with the
 backend's normalized two-letter `/status` region, with a button to adopt it.
-Fresh setups have no implicit US default. Unknown/numeric/multiple backend
+Fresh setups now default to BR by explicit user request; saved country choices are preserved. Unknown/numeric/multiple backend
 regions are not guessed. Country edits persist immediately; changing the field
 invalidates searches. The controller rejects both newly added and previously
 queued mismatched tracks before download, preserving their original IDs.

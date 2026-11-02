@@ -95,12 +95,13 @@ def test_album_ui_open_tracks_queue_and_stale_results(app, tmp_path, monkeypatch
     assert calls[-1][1]["country"] == "gb"
 
     stale = Future()
+    stale.set_running_or_notify_cancel()
     window.catalog_future = (window.generation, stale)
     window.search_kind.setCurrentIndex(0)
     stale.set_result([Album("gb", "99999", "Stale album")])
     window.tick()
-    assert window.results == [] and window.result_list.count() == 0
-    assert not window.all_button.isEnabled()
+    assert [track.id for track in window.results] == ["12346", "12347"]
+    assert window.result_list.count() == 2
 
     monkeypatch.setattr(window.catalog, "request", lambda *args, **kwargs: [])
     window.search_kind.setCurrentIndex(1)
@@ -118,9 +119,11 @@ def test_br_direct_song_adopts_and_persists_storefront(app, tmp_path, monkeypatc
 
     window = Window(tmp_path / "cache")
     monkeypatch.setattr(window.controller, "tick", lambda: None)
+    window.country.setText("us")
     window.results = [Track("us", "99999", "Old US result", "88888")]
     window.result_list.addItem("Old US result")
     stale = Future()
+    stale.set_running_or_notify_cancel()
     window.catalog_future = (window.generation, stale)
     window.url.setText("https://music.apple.com/br/song/still/593614986?")
     window.add_url()
@@ -149,6 +152,7 @@ def test_br_direct_song_adopts_and_persists_storefront(app, tmp_path, monkeypatc
         ]
 
     monkeypatch.setattr(window.catalog, "request", request)
+    window.search_kind.setCurrentIndex(0)
     window.search.setText("daughter still")
     window.search_catalog()
     wait_until(lambda: (window.tick(), window.catalog_future is None)[1])
@@ -245,7 +249,8 @@ def test_fresh_storefront_uses_only_unambiguous_backend_region(app, tmp_path, mo
     monkeypatch.setattr(window.controller, "tick", lambda: None)
     try:
         window.tick()
-        assert window.country.text() == ""  # No silent US fallback.
+        assert window.country.text() == "br"  # Explicit requested default.
+        window.country.clear()
         window.controller.runtime.regions = ("br", "us")
         window.tick()
         assert window.country.text() == ""

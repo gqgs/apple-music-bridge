@@ -240,3 +240,50 @@ def test_qt_search_album_history_home_clear_and_stale_navigation(app, tmp_path, 
         assert not window.release_shelf.cards
     finally:
         window.close()
+
+
+def test_artwork_completion_cannot_repaint_old_navigation(app, tmp_path, monkeypatch):
+    from concurrent.futures import Future
+
+    window = Window(tmp_path / "cache")
+    window.startup_attempted = True
+    monkeypatch.setattr(window.controller, "tick", lambda: None)
+    # Completion is keyed by URL, never by an old row index/widget callback.
+    future = Future()
+    window.artwork.pending[URL] = future
+    window.artwork.images[BADGE_URL] = decode(png())
+    window.results = [TRACK.album]
+    window.result_list.addItem(TRACK.album.title)
+    window.result_list.setCurrentRow(0)
+    window.country.setText("gb")
+    future.set_result(decode(png()))
+    window.tick()
+    assert window.result_list.count() == 0
+    assert not window.results
+    window.close()
+
+
+def test_release_artist_bound_and_navigation_cancels_deferred_work(app, tmp_path, monkeypatch):
+    from apple_music_player.catalog import CatalogDeferred
+
+    window = Window(tmp_path / "cache")
+    window.startup_attempted = True
+    monkeypatch.setattr(window.controller, "tick", lambda: None)
+    calls = []
+
+    def deferred(artist, country):
+        calls.append((artist, country))
+        raise CatalogDeferred(3)
+
+    monkeypatch.setattr(window.catalog, "artist_albums", deferred)
+    for n in range(8):
+        window.history.record(Track("br", str(n), "Fixture", str(n), artist_id=str(n)))
+    window.update_home()
+    window.refresh_releases()
+    wait_until(lambda: (app.processEvents(), window.tick(), window.catalog_timer.isActive())[2])
+    assert len(window.history.artists("br")) == 5 and len(calls) == 1
+    window.pages.setCurrentIndex(1)
+    assert not window.catalog_timer.isActive() and window.release_context is None
+    window.pages.setCurrentIndex(0)
+    window.close()
+    assert not window.catalog_timer.isActive() and window.artwork.closed

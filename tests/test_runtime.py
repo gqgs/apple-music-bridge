@@ -91,7 +91,11 @@ def package(tmp_path, fake_downloader, monkeypatch):
 def installed(tmp_path, package):
     archive, pin = package
     store = RuntimeStore(tmp_path / "runtime", pin)
-    store.install(archive, threading.Event())
+    previous_umask = os.umask(0o022)
+    try:
+        store.install(archive, threading.Event())
+    finally:
+        os.umask(previous_umask)
     yield store
     store.close()
 

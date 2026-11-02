@@ -114,7 +114,9 @@ def extract_runtime(archive, destination, cancel):
                 continue
             target = destination.joinpath(*parts)
             safe_path(destination, target)
-            private_dir(target.parent)
+            directory = destination
+            for part in parts[:-1]:
+                directory = private_dir(directory / part)
             with package.open(entry) as src, open(target, "xb") as dst:
                 os.chmod(target, 0o600)
                 copied = 0

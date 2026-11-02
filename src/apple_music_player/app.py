@@ -71,6 +71,8 @@ class Window(QMainWindow):
         )
         self.controller.backend = "lite" if self.settings.get("backend") == "lite" else "classic"
         self.setup_service = None
+        self.closing = False
+        self.startup_attempted = False
         self.catalog = Catalog()
         self.catalog_pool = ThreadPoolExecutor(max_workers=1)
         self.catalog_future = None
@@ -90,6 +92,10 @@ class Window(QMainWindow):
         self.button(title_row, "Backend setup", self.backend_setup)
         self.button(title_row, "Settings", self.edit_settings)
         layout.addLayout(title_row)
+        self.backend_status = QLabel()
+        self.backend_status.setTextFormat(Qt.PlainText)
+        self.backend_status.setWordWrap(True)
+        layout.addWidget(self.backend_status)
         catalog_note = QLabel("Search public iTunes metadata · Apple Music availability may differ")
         layout.addWidget(catalog_note)
         search_row = QHBoxLayout()
@@ -174,6 +180,34 @@ class Window(QMainWindow):
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.tick)
         self.timer.start(100)
+        QTimer.singleShot(0, self.start_saved_backend)
+
+    def ensure_setup_service(self):
+        from .setup_ui import SetupService
+
+        if not self.setup_service:
+            self.setup_service = SetupService(self)
+        self.controller.runtime = self.setup_service.runtime
+        return self.setup_service
+
+    def start_saved_backend(self):
+        # Exactly once per window startup; never called from the polling loop.
+        if self.closing or self.startup_attempted or self.controller.backend != "lite":
+            return
+        self.startup_attempted = True
+        try:
+            service = self.ensure_setup_service()
+            if service.future or service.runtime.process or service.runtime.cancel.is_set():
+                return
+            if service.runtime.store.current.exists() and service.runtime.signed_in():
+                service.runtime.state = "Starting saved managed service"
+                service.dispatch(service.runtime.start)
+            else:
+                service.runtime.state = "Setup incomplete · open Backend setup"
+        except (PlayerError, OSError):
+            self.controller.error = (
+                "Managed startup failed. Open Backend setup to check its status."
+            )
 
     def button(self, row, text, action):
         button = QPushButton(text)
@@ -263,12 +297,10 @@ class Window(QMainWindow):
             self.controller.error = str(exc)
 
     def backend_setup(self):
-        from .setup_ui import SetupDialog, SetupService
+        from .setup_ui import SetupDialog
 
         try:
-            if not self.setup_service:
-                self.setup_service = SetupService(self)
-            self.controller.runtime = self.setup_service.runtime
+            self.ensure_setup_service()
             SetupDialog(self.setup_service, self.controller, self).exec()
             self.settings["backend"] = self.controller.backend
             self.save_settings()
@@ -334,6 +366,18 @@ class Window(QMainWindow):
                 )
 
     def tick(self):
+        if self.controller.backend == "lite":
+            service = self.setup_service
+            text = "Managed service not started · open Backend setup"
+            if service:
+                text = (
+                    "Stopping managed service" if service.stop_requested else service.runtime.state
+                )
+                if service.error:
+                    text += " · " + service.error
+            self.backend_status.setText(text)
+        else:
+            self.backend_status.setText("External classic backend")
         if self.catalog_future and self.catalog_future[1].done():
             generation, future = self.catalog_future
             self.catalog_future = None
@@ -403,6 +447,7 @@ class Window(QMainWindow):
         )
 
     def closeEvent(self, event):
+        self.closing = True
         self.timer.stop()
         self.catalog_pool.shutdown(wait=False, cancel_futures=True)
         self.controller.close()

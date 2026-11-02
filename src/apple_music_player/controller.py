@@ -144,6 +144,15 @@ class Controller:
                     binary = self.downloader
                     if self.backend == "lite":
                         if not self.runtime or not self.runtime.ready:
+                            if (
+                                self.runtime
+                                and not self.runtime.cancel.is_set()
+                                and (
+                                    self.runtime.starting
+                                    or (self.runtime.mode == "service" and self.runtime.process)
+                                )
+                            ):
+                                return  # Leave queued while saved service startup is in progress.
                             entry.state = "Failed"
                             self.error = (
                                 "Managed lite is not ready. Open Backend setup, then Retry."

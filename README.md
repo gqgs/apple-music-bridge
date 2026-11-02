@@ -15,7 +15,7 @@ ruff check src tests
 ruff format --check src tests
 ```
 
-**One-window backend setup:** open **Backend setup** for the new optional **Managed rootless lite** flow: pinned runtime installation, local sign-in/2FA, start/status and shutdown. It requires Linux x86_64 with permitted user namespaces/mounts. Installation and execution each require a user action; no sudo or automatic OS changes. The wrapper ZIP is an upstream GitHub Actions artifact (browser sign-in may be needed), verified by SHA-256 before installation. See [the three setup steps and exact pins](docs/rootless-setup.md). This integration is source-reviewed and mock-tested; real Arch authentication still needs validation.
+**One-window backend setup:** open **Backend setup** for the new optional **Managed rootless lite** flow: pinned runtime installation, local sign-in/2FA, start/status and shutdown. It requires Linux x86_64 with permitted user namespaces/mounts. Installation and first sign-in require explicit user actions. Once configured and selected, the managed backend starts in the background with the app; its status is shown in the main window. Stop is respected for the current session. No sudo or automatic OS changes. The wrapper ZIP is an upstream GitHub Actions artifact (browser sign-in may be needed), verified by SHA-256 before installation. See [the three setup steps and exact pins](docs/rootless-setup.md). This integration is source-reviewed and mock-tested; real Arch authentication still needs validation.
 
 **Common requirements:** `mpv`, `ffmpeg`/`ffprobe`, `MP4Box` and the normal Qt Wayland libraries. Backend setup lists missing tools. It does not install system packages.
 

@@ -1,5 +1,6 @@
 """Owned rootless process and local login state; no raw diagnostics cross this boundary."""
 
+import errno
 import fcntl
 import json
 import os
@@ -117,6 +118,7 @@ class ManagedRuntime:
         self.mode = ""
         self.state = "Not started" if store.current.exists() else "Not installed"
         self.ready = False
+        self.starting = False
         self.args_fd = None
         self.fifo_fd = None
         self.code_ready = threading.Event()
@@ -167,8 +169,22 @@ class ManagedRuntime:
             raise PlayerError("Setup cancelled.")
         if self.process:
             raise PlayerError("The managed backend is already running. Stop it before retrying.")
+        with socket.socket() as connection:
+            connection.settimeout(0.5)
+            # httplib uses SO_REUSEPORT on Linux, which could also share a live
+            # listener. Refuse any reachable owner before probing reusable bind.
+            if connection.connect_ex(("127.0.0.1", 12340)) != errno.ECONNREFUSED:
+                raise PlayerError(
+                    "Port 12340 is busy. Stop its owner yourself; the player will not kill it."
+                )
         with socket.socket() as test:
             try:
+                # Match upstream httplib's listener reuse policy. Without reuse,
+                # completed health connections in TIME_WAIT look like a live
+                # port owner after Stop, even though the service has exited.
+                test.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                if hasattr(socket, "SO_REUSEPORT"):
+                    test.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
                 test.bind(("127.0.0.1", 12340))
             except OSError:
                 raise PlayerError(
@@ -381,9 +397,15 @@ class ManagedRuntime:
 
     def _stop_process(self):
         self.code_ready.clear()
+        process = self.process
         if self.process:
             try:
                 os.killpg(self.process.pid, signal.SIGINT)
+                # The rootless launcher handles SIGINT, not SIGTERM. Give it
+                # and our supervisor time to terminate/reap the namespace child.
+                self.process.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                pass
             except ProcessLookupError:
                 pass
             stop_group(self.process)
@@ -391,6 +413,8 @@ class ManagedRuntime:
         if self.reader:
             self.reader.join(timeout=1)
             self.reader = None
+        if process and process.stderr:
+            process.stderr.close()
         if self.args_fd is not None:
             os.close(self.args_fd)
             self.args_fd = None

@@ -36,6 +36,7 @@ class SetupService(QObject):
         self.pool = ThreadPoolExecutor(max_workers=1)
         self.future = None
         self.active_kind = ""
+        self.stop_requested = False
         self.error = ""
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.tick)
@@ -44,7 +45,7 @@ class SetupService(QObject):
     @property
     def busy(self):
         # A queued/running user action is busy; periodic observation is not.
-        return self.future is not None and self.active_kind != "poll"
+        return self.stop_requested or (self.future is not None and self.active_kind != "poll")
 
     def finish_completed(self):
         if self.future and self.future.done():
@@ -54,6 +55,10 @@ class SetupService(QObject):
                 self.error = str(exc)
             except Exception:
                 self.error = "Backend operation failed. Cancel and retry; diagnostics are withheld."
+            if self.active_kind == "stop":
+                self.stop_requested = False
+            if self.active_kind == "start":
+                self.runtime.starting = False
             self.future = None
             self.active_kind = ""
 
@@ -65,6 +70,8 @@ class SetupService(QObject):
         previous_poll = self.future
         self.error = ""
         self.active_kind = operation.__name__
+        if self.active_kind == "start":
+            self.runtime.starting = True
         if self.active_kind in {"install", "start", "login"}:
             self.runtime.cancel.clear()
 
@@ -80,9 +87,23 @@ class SetupService(QObject):
 
     def tick(self):
         self.finish_completed()
+        if self.stop_requested:
+            if not self.future:
+                self.active_kind = "stop"
+                self.future = self.pool.submit(self.runtime.stop)
+            return
         if not self.future and self.runtime.process:
             self.active_kind = "poll"
             self.future = self.pool.submit(self.runtime.poll)
+
+    def request_stop(self):
+        # Cancellation is immediate, but cleanup is a durable serialized action.
+        # Start must not clear the cancellation flag while an old poll/start ends.
+        self.stop_requested = True
+        self.runtime.cancel.set()
+        self.runtime.ready = False
+        self.runtime.state = "Stopping managed service"
+        self.tick()
 
     def install(self, archive):
         if self.runtime.process:
@@ -241,9 +262,7 @@ class SetupDialog(QDialog):
         self.password.setText("")
         self.username.setText("")
         self.code.setText("")
-        self.service.runtime.cancel.set()
-        if not self.service.future:
-            self.service.dispatch(self.service.runtime.stop)
+        self.service.request_stop()
 
     def refresh(self):
         r = self.service.runtime

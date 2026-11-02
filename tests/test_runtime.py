@@ -58,6 +58,17 @@ else:
     assert "--debug" not in sys.argv and "--cors" not in sys.argv
     if mode == "crash":
         sys.exit(0)
+    if mode == "listen":
+        import socket, signal
+        listener = socket.socket()
+        listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
+        listener.bind(("127.0.0.1", 12340))
+        listener.listen()
+        # A child holding the socket and inherited lock must also be stopped.
+        if os.fork() == 0:
+            signal.signal(signal.SIGINT, signal.SIG_IGN)
+            signal.signal(signal.SIGTERM, signal.SIG_IGN)
     time.sleep(120)
 """
 
@@ -230,7 +241,10 @@ def test_login_two_factor_cancel_restore_and_ready(installed, monkeypatch):
 def test_denied_busy_crash_unauthed_health(installed, monkeypatch):
     runtime = ManagedRuntime(installed)
     with socket.socket() as busy:
+        busy.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        busy.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
         busy.bind(("127.0.0.1", 12340))
+        busy.listen()
         with pytest.raises(PlayerError, match="busy"):
             runtime.start()
     monkeypatch.setenv("TEST_LITE_MODE", "denied")
@@ -550,3 +564,148 @@ def test_closing_setup_preserves_service_and_polling(app, installed, tmp_path, m
     finally:
         service.close()
         window.close()
+
+
+def test_repeated_start_stop_releases_port_stream_and_inherited_lock(installed, monkeypatch):
+    monkeypatch.setenv("TEST_LITE_MODE", "listen")
+    runtime = ManagedRuntime(installed)
+
+    def listening():
+        with socket.socket() as connection:
+            return connection.connect_ex(("127.0.0.1", 12340)) == 0
+
+    try:
+        for _ in range(3):
+            runtime.start()
+            wait_until(listening)
+            process = runtime.process
+            stream = process.stderr
+            runtime.stop()
+            assert process.poll() is not None and stream.closed
+            with socket.socket() as available:
+                available.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                available.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
+                available.bind(("127.0.0.1", 12340))
+        root, pin = installed.root, installed.pin
+        runtime.close()
+        # No orphan descendant may retain the inherited flock after app shutdown.
+        reopened = RuntimeStore(root, pin)
+        reopened.close()
+    finally:
+        runtime.close()
+
+
+def test_preflight_allows_time_wait_but_not_live_owner(installed):
+    runtime = ManagedRuntime(installed)
+    # Reproduce httplib closing a completed /status connection before the client.
+    with socket.socket() as listener, socket.socket() as client:
+        listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
+        listener.bind(("127.0.0.1", 12340))
+        listener.listen()
+        with pytest.raises(PlayerError, match="busy"):
+            runtime._preflight()
+        probe, _ = listener.accept()
+        probe.close()
+        client.settimeout(2)
+        client.connect(("127.0.0.1", 12340))
+        peer, _ = listener.accept()
+        peer.close()
+        assert client.recv(1) == b""
+    # The former plain bind reports busy despite there being no listener.
+    with socket.socket() as old_check:
+        with pytest.raises(OSError):
+            old_check.bind(("127.0.0.1", 12340))
+    runtime._preflight()
+
+
+def test_stop_is_durable_while_poll_finishes(app, installed, tmp_path):
+    from apple_music_player.setup_ui import SetupService
+
+    service = SetupService(root=tmp_path / "unused-runtime")
+    service.runtime.close()
+    service.runtime = ManagedRuntime(installed)
+    entered, release = threading.Event(), threading.Event()
+
+    def old_poll():
+        entered.set()
+        assert release.wait(5)
+
+    service.active_kind = "poll"
+    service.future = service.pool.submit(old_poll)
+    try:
+        assert entered.wait(5)
+        service.request_stop()
+        assert service.busy and service.stop_requested
+        assert not service.dispatch(service.runtime.start)
+        assert service.runtime.cancel.is_set()
+        release.set()
+        wait_until(lambda: (service.tick(), not service.stop_requested)[1])
+        assert service.runtime.state == "Stopped" and service.runtime.process is None
+        assert service.runtime.cancel.is_set()
+    finally:
+        release.set()
+        service.close()
+
+
+@pytest.mark.parametrize("backend,saved", [("lite", True), ("lite", False), ("classic", True)])
+def test_window_autostarts_only_saved_managed_once(
+    app, installed, tmp_path, monkeypatch, backend, saved
+):
+    import json
+
+    from apple_music_player.app import Window
+
+    monkeypatch.setattr("apple_music_player.setup_ui.RuntimeStore", lambda root: installed)
+    monkeypatch.setattr("apple_music_player.runtime.health_status", lambda: True)
+    if saved:
+        data = installed.current / "rootfs/data"
+        for name in (".player-login-ok", "DEV_TOKEN", "MUSIC_TOKEN", "STOREFRONT_ID"):
+            (data / name).write_text("synthetic-session")
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    (cache / "settings.json").write_text(json.dumps({"backend": backend}))
+    window = Window(cache)
+    try:
+        app.processEvents()
+        if backend == "classic":
+            assert window.setup_service is None
+            return
+        service = window.setup_service
+        assert service is not None
+        if not saved:
+            assert service.runtime.process is None and service.future is None
+            assert "Setup incomplete" in service.runtime.state
+            return
+        wait_until(lambda: (service.tick(), service.runtime.ready)[1])
+        process = service.runtime.process
+        window.tick()
+        assert "Service reachable" in window.backend_status.text()
+        service.request_stop()
+        wait_until(lambda: (service.tick(), not service.stop_requested)[1])
+        assert process.poll() is not None
+        window.start_saved_backend()
+        window.tick()
+        app.processEvents()
+        assert service.runtime.process is None  # Stop is respected for this session.
+        assert "Stopped" in window.backend_status.text()
+    finally:
+        window.close()
+        app.processEvents()
+
+
+def test_queue_waits_for_managed_startup_but_not_explicit_stop(installed, tmp_path):
+    runtime = ManagedRuntime(installed)
+    runtime.starting = True
+    controller = Controller(Cache(tmp_path / "cache", 1000), Mpv(), "unused")
+    controller.backend = "lite"
+    controller.runtime = runtime
+    controller.add(Track("us", "12345", "Fixture"), "lossless")
+    try:
+        controller.tick()
+        assert controller.queue[0].state == "Queued" and controller.future is None
+        runtime.cancel.set()
+        controller.tick()
+        assert controller.queue[0].state == "Failed" and controller.future is None
+    finally:
+        controller.close()
+        runtime.close()

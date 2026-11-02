@@ -664,35 +664,34 @@ class Window(QMainWindow):
                     if self.pending_result_kind == "releases":
                         self.receive_releases(result)
                         result = None
-                    if result is None:
-                        return
-                    self.results = result
-                    self.result_list.clear()
-                    self.result_list.addItems([track.title for track in self.results])
-                    for index in range(self.result_list.count()):
-                        self.result_list.item(index).setIcon(placeholder())
-                    if self.results:
-                        self.result_list.setCurrentRow(0)
-                    albums = self.pending_result_kind == "albums"
-                    self.selected_button.setText("Open album" if albums else "Queue selected")
-                    self.selected_button.setEnabled(bool(self.results))
-                    self.all_button.setText(
-                        "Queue album" if self.pending_album_title else "Queue all results"
-                    )
-                    self.all_button.setEnabled(bool(self.results) and not albums)
-                    label = "albums" if albums else "songs"
-                    if len(self.results) == 1:
-                        label = label[:-1]
-                    action = "open album" if albums else "queue"
-                    context = self.pending_album_title
-                    self.catalog_status.setText(
-                        f"{context + ' · ' if context else ''}{len(self.results)} {label} · "
-                        + (
-                            f"double-click to {action}"
-                            if self.results
-                            else "try another query/storefront or paste an Apple Music URL"
+                    if result is not None:
+                        self.results = result
+                        self.result_list.clear()
+                        self.result_list.addItems([track.title for track in self.results])
+                        for index in range(self.result_list.count()):
+                            self.result_list.item(index).setIcon(placeholder())
+                        if self.results:
+                            self.result_list.setCurrentRow(0)
+                        albums = self.pending_result_kind == "albums"
+                        self.selected_button.setText("Open album" if albums else "Queue selected")
+                        self.selected_button.setEnabled(bool(self.results))
+                        self.all_button.setText(
+                            "Queue album" if self.pending_album_title else "Queue all results"
                         )
-                    )
+                        self.all_button.setEnabled(bool(self.results) and not albums)
+                        label = "albums" if albums else "songs"
+                        if len(self.results) == 1:
+                            label = label[:-1]
+                        action = "open album" if albums else "queue"
+                        context = self.pending_album_title
+                        self.catalog_status.setText(
+                            f"{context + ' · ' if context else ''}{len(self.results)} {label} · "
+                            + (
+                                f"double-click to {action}"
+                                if self.results
+                                else "try another query/storefront or paste an Apple Music URL"
+                            )
+                        )
                 except CatalogDeferred as exc:
                     if exc.rate_limited:
                         self.catalog_retries += 1

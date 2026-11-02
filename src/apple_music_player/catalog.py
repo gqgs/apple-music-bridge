@@ -1,4 +1,4 @@
-"""Documented public iTunes metadata. No previews, artwork or account credentials."""
+"""Documented public iTunes metadata. No audio previews or account credentials."""
 
 import json
 import re

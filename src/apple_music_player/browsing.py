@@ -46,6 +46,7 @@ class AlbumCard(QFrame):
         self.setFrameShape(QFrame.StyledPanel)
         self.setFixedWidth(210 if not compact else 190)
         layout = QVBoxLayout(self)
+        layout.setAlignment(Qt.AlignTop)
         self.cover = QPushButton()
         self.cover.setIcon(placeholder())
         self.cover.setIconSize(QSize(100, 100))

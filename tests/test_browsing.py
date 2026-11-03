@@ -458,8 +458,7 @@ def test_one_shared_badge_for_home_search_and_now_playing(app, tmp_path, monkeyp
         assert 0 <= strip_top - pages_bottom <= 16
         assert strip_bottom < window.now_card.mapTo(window, QPoint()).y()
         assert window.pause_button.mapTo(window, window.pause_button.rect().bottomLeft()).y() < 480
-        assert window.now_card.store.icon().isNull()
-        assert window.now_card.store.text() == "View album in iTunes"
+        assert not hasattr(window.now_card, "store")
         window.store_badge.click()
         assert opened[-1] == store_link(window.badge_album)
 
@@ -467,13 +466,13 @@ def test_one_shared_badge_for_home_search_and_now_playing(app, tmp_path, monkeyp
         verify()
         assert window.home_scroll.verticalScrollBar().maximum() > 0
         for card in window.recent_shelf.cards + window.release_shelf.cards:
-            assert card.store.icon().isNull() and card.store.text() == "View album in iTunes"
+            assert not hasattr(card, "store")
         window.pages.setCurrentIndex(1)
         window.results = [album]
         window.result_list.addItem(album.title)
         window.result_list.setCurrentRow(0)
         verify()
-        assert window.detail_card.store.icon().isNull()
+        assert not hasattr(window.detail_card, "store")
         window.results = [TRACK]
         window.result_list.clear()
         window.result_list.addItem(TRACK.title)
@@ -649,5 +648,57 @@ def test_text_rows_duration_column_and_short_play_label(app, tmp_path, monkeypat
         window.resize(1000, 480)
         app.processEvents()
         assert window.height() == 480
+    finally:
+        window.close()
+
+
+def test_no_repeated_store_controls_and_shared_badge_tracks_focused_album(
+    app, tmp_path, monkeypatch
+):
+    from PySide6.QtWidgets import QPushButton
+
+    from apple_music_player.browsing import store_link
+
+    window = Window(tmp_path / "cache")
+    window.startup_attempted = True
+    window.timer.stop()
+    monkeypatch.setattr(window, "refresh_releases", lambda: None)
+    monkeypatch.setattr(window.controller, "tick", lambda: None)
+    image = decode(png())
+    monkeypatch.setattr(window.artwork, "get", lambda url: image)
+    opened = []
+    monkeypatch.setattr(
+        "apple_music_player.app.QDesktopServices.openUrl", lambda url: opened.append(url.toString())
+    )
+    window.show()
+    app.processEvents()
+    albums = [
+        Album(
+            "br",
+            str(n),
+            f"Album {n}",
+            artwork_url=URL,
+            store_url=f"https://music.apple.com/br/album/fixture/{n}",
+        )
+        for n in [201, 202]
+    ]
+    try:
+        window.recent_shelf.set_albums(albums, "")
+        app.processEvents()
+        second = window.recent_shelf.cards[1]
+        second.cover.setFocus(Qt.TabFocusReason)
+        app.processEvents()
+        window.refresh_artwork()
+        assert window.badge_album == albums[1]
+        window.store_badge.click()
+        assert opened == [store_link(albums[1])]
+        assert len(window.findChildren(QPushButton, "itunesStoreBadge")) == 1
+        assert not [
+            b for b in window.findChildren(QPushButton) if "View album in iTunes" in b.text()
+        ]
+        assert not hasattr(window.album_header, "store")
+        window.pages.setCurrentIndex(2)
+        window.refresh_artwork()
+        assert window.badge_strip.isHidden()  # No old Home target remains on an empty Queue page.
     finally:
         window.close()

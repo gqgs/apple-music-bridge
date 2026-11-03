@@ -2,8 +2,8 @@
 
 from urllib.parse import urlsplit
 
-from PySide6.QtCore import QRect, QSize, Qt, QUrl
-from PySide6.QtGui import QColor, QDesktopServices, QIcon, QPalette, QPixmap
+from PySide6.QtCore import QEvent, QRect, QSize, Qt, Signal
+from PySide6.QtGui import QColor, QIcon, QPalette, QPixmap
 from PySide6.QtWidgets import (
     QApplication,
     QFrame,
@@ -81,6 +81,8 @@ class TrackRowDelegate(QStyledItemDelegate):
 
 
 class AlbumCard(QFrame):
+    focused = Signal(object)
+
     def __init__(self, album, artwork, opened, compact=False):
         super().__init__()
         self.album, self.artwork = album, artwork
@@ -93,6 +95,7 @@ class AlbumCard(QFrame):
         self.cover.setIconSize(QSize(100, 100))
         self.cover.setFixedHeight(110)
         self.cover.setAccessibleName("Open " + album.title)
+        self.cover.installEventFilter(self)
         self.cover.clicked.connect(lambda: opened(album))
         layout.addWidget(self.cover)
         self.title = QLabel(album.album_title or album.title)
@@ -104,11 +107,6 @@ class AlbumCard(QFrame):
         artist.setTextFormat(Qt.PlainText)
         artist.setWordWrap(True)
         layout.addWidget(artist)
-        self.store = QPushButton("View album in iTunes")
-        self.store.setAccessibleName("View " + album.title + " in iTunes")
-        self.store.clicked.connect(lambda: QDesktopServices.openUrl(QUrl(store_link(album))))
-        self.store.setMinimumHeight(40)
-        layout.addWidget(self.store)
         if compact:
             self.setFixedWidth(145)
             self.cover.setFixedHeight(54)
@@ -116,6 +114,11 @@ class AlbumCard(QFrame):
             self.title.hide()
             artist.hide()
         self.revision = -1
+
+    def eventFilter(self, watched, event):
+        if watched is self.cover and event.type() in (QEvent.Enter, QEvent.FocusIn):
+            self.focused.emit(self.album)
+        return super().eventFilter(watched, event)
 
     def refresh(self):
         # The window supplies one shared official badge beside the visible artwork view.
@@ -155,11 +158,6 @@ class AlbumHeader(QWidget):
         text.addWidget(self.details)
         self.actions = QHBoxLayout()
         text.addLayout(self.actions)
-        self.store = QPushButton("View album in iTunes")
-        self.store.clicked.connect(
-            lambda: QDesktopServices.openUrl(QUrl(store_link(self.album))) if self.album else None
-        )
-        text.addWidget(self.store, 0, Qt.AlignLeft)
         row.addLayout(text, 1)
         self.hide()
 
@@ -190,6 +188,8 @@ class AlbumHeader(QWidget):
 
 
 class Shelf(QWidget):
+    focused = Signal(object)
+
     def __init__(self, artwork, opened):
         super().__init__()
         self.artwork, self.opened = artwork, opened
@@ -200,7 +200,7 @@ class Shelf(QWidget):
         outer.addWidget(self.note)
         self.scroll = QScrollArea()
         self.scroll.setWidgetResizable(True)
-        self.scroll.setMinimumHeight(260)
+        self.scroll.setMinimumHeight(220)
         self.content = QWidget()
         self.row = QHBoxLayout(self.content)
         self.row.setAlignment(Qt.AlignLeft)
@@ -213,6 +213,7 @@ class Shelf(QWidget):
             card.deleteLater()
         self.cards = [AlbumCard(album, self.artwork, self.opened) for album in albums[:20]]
         for card in self.cards:
+            card.focused.connect(self.focused.emit)
             self.row.addWidget(card)
         self.note.setText(
             empty if not albums else f"{len(albums)} albums · click a cover to open tracks"

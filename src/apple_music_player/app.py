@@ -74,6 +74,7 @@ class Window(QMainWindow):
         self.detail_card = None
         self.now_card = None
         self.now_album = None
+        self.badge_context = None
         self.settings_path = self.cache.root / "settings.json"
         if self.settings_path.is_symlink():
             raise PlayerError("Settings file must not be a symlink.")
@@ -148,9 +149,11 @@ class Window(QMainWindow):
         home_layout.addWidget(home_title)
         home_layout.addWidget(QLabel("Recently played albums · this device only"))
         self.recent_shelf = Shelf(self.artwork, self.open_album)
+        self.recent_shelf.focused.connect(self.set_badge_context)
         home_layout.addWidget(self.recent_shelf)
         home_layout.addWidget(QLabel("Recent releases from artists you’ve played"))
         self.release_shelf = Shelf(self.artwork, self.open_album)
+        self.release_shelf.focused.connect(self.set_badge_context)
         home_layout.addWidget(self.release_shelf)
         self.release_status = QLabel(
             "Last 90 days · limited public catalog; dates may include reissues"
@@ -261,7 +264,7 @@ class Window(QMainWindow):
         layout.addLayout(queue_buttons)
         layout = root_layout
         # One badge for the whole visible layout, outside scrolling content and directly
-        # between catalog artwork and now playing. Cards retain their own destination links.
+        # between catalog artwork and now playing, with the focused album as destination.
         self.badge_album = None
         self.badge_strip = QWidget()
         badge_row = QHBoxLayout(self.badge_strip)
@@ -321,6 +324,7 @@ class Window(QMainWindow):
         QTimer.singleShot(0, self.start_saved_backend)
 
     def navigation_changed(self, index):
+        self.badge_context = None
         self.invalidate_search()
         self.release_context = None
         if index == 0:
@@ -334,6 +338,7 @@ class Window(QMainWindow):
         self.request_catalog(self.catalog.album, album.id, album.country, album_title=album.title)
 
     def show_selected_album(self, row):
+        self.badge_context = self.album_header.album
         if self.detail_card:
             self.detail_host.removeWidget(self.detail_card)
             self.detail_card.deleteLater()
@@ -344,7 +349,9 @@ class Window(QMainWindow):
             item = self.results[row]
             album = item if isinstance(item, Album) else item.album
             if album:
+                self.badge_context = album
                 self.detail_card = AlbumCard(album, self.artwork, self.open_album)
+                self.detail_card.focused.connect(self.set_badge_context)
                 self.detail_host.addWidget(self.detail_card)
 
     def show_album_header(self):
@@ -358,6 +365,10 @@ class Window(QMainWindow):
             self.result_buttons.insertWidget(2, self.play_album_button)
             self.result_buttons.insertWidget(3, self.all_button)
         self.play_album_button.setVisible(album is not None)
+
+    def set_badge_context(self, album):
+        self.badge_context = album
+        self.refresh_artwork()
 
     def open_badge_album(self):
         if self.badge_album:
@@ -377,6 +388,8 @@ class Window(QMainWindow):
             )
         if self.now_card:
             candidates.append(self.now_card.album)
+        if self.badge_context in candidates:
+            candidates.insert(0, self.badge_context)
         self.badge_album = next((a for a in candidates if a and allowed_url(a.artwork_url)), None)
         badge = self.artwork.get(BADGE_URL) if self.badge_album else None
         badge_ready = badge is not None and not badge.isNull()
@@ -883,6 +896,7 @@ class Window(QMainWindow):
                 AlbumCard(album, self.artwork, self.open_album, compact=True) if album else None
             )
             if self.now_card:
+                self.now_card.focused.connect(self.set_badge_context)
                 self.now_host.addWidget(self.now_card)
         self.media_label.setText(
             c.media.label if c.media else "Media format appears after download verification."

@@ -32,7 +32,7 @@ from PySide6.QtWidgets import (
 from .artwork import BADGE_URL, Artwork, allowed_url
 from .browsing import AlbumCard, AlbumHeader, Shelf, TrackRowDelegate, placeholder, store_link
 from .cache import Cache
-from .catalog import Catalog, CatalogDeferred, recent_releases
+from .catalog import Catalog, CatalogDeferred, SearchResults, public_text, recent_releases
 from .controller import Controller
 from .library import History
 from .model import Album, PlayerError, Track, parse_url
@@ -110,6 +110,8 @@ class Window(QMainWindow):
         self.catalog_timer.timeout.connect(self.resume_catalog)
         self.generation = 0
         self.results = []
+        self.last_search_diagnostics = None
+        self.displayed_search_diagnostics = None
         self.album_tracks = ()
         self.pending_result_kind = "songs"
         self.pending_album_title = ""
@@ -179,7 +181,7 @@ class Window(QMainWindow):
         search_row = QHBoxLayout()
         self.search = QLineEdit()
         self.search.setPlaceholderText("Search songs or artists")
-        self.search.textChanged.connect(self.invalidate_search)
+        self.search.textChanged.connect(self.search_input_changed)
         self.search.returnPressed.connect(self.search_catalog)
         search_row.addWidget(self.search, 1)
         self.search_kind = QComboBox()
@@ -213,7 +215,18 @@ class Window(QMainWindow):
         layout.addLayout(storefront_row)
         self.catalog_status = QLabel("Search, browse a result's album, or paste a URL below.")
         self.catalog_status.setTextFormat(Qt.PlainText)
-        layout.addWidget(self.catalog_status)
+        self.catalog_status.setWordWrap(True)
+        diagnostics_row = QHBoxLayout()
+        diagnostics_row.addWidget(self.catalog_status, 1)
+        self.copy_search_button = self.button(
+            diagnostics_row, "Copy search diagnostics", self.copy_search_diagnostics
+        )
+        self.copy_search_button.setEnabled(False)
+        self.copy_search_button.setToolTip(
+            "Copy the last completed query and public result IDs/titles. "
+            "No account data or raw response."
+        )
+        layout.addLayout(diagnostics_row)
         self.album_header = AlbumHeader(self.artwork)
         layout.addWidget(self.album_header)
         self.result_list = QListWidget()
@@ -535,6 +548,30 @@ class Window(QMainWindow):
         row.addWidget(button)
         return button
 
+    def search_input_changed(self):
+        self.invalidate_search()
+        if self.results:
+            self.catalog_status.setText(
+                "Search text changed · previous results remain displayed. Press Search to update."
+            )
+
+    def copy_search_diagnostics(self):
+        if not self.last_search_diagnostics:
+            return
+        report = {
+            "schema": "apple-music-player-search-v1",
+            "current_input": {
+                "query": public_text(self.search.text(), 200),
+                "storefront": public_text(self.country.text(), 2),
+                "entity": self.search_kind.currentData(),
+            },
+            "currently_displaying_this_search": self.displayed_search_diagnostics
+            is self.last_search_diagnostics,
+            "catalog_request_pending": bool(self.catalog_future or self.catalog_timer.isActive()),
+            "last_completed_search": self.last_search_diagnostics,
+        }
+        QApplication.clipboard().setText(json.dumps(report, ensure_ascii=False, indent=2))
+
     def invalidate_search(self, *_, clear=False):
         self.album_tracks = ()
         self.play_album_button.setEnabled(False)
@@ -546,6 +583,7 @@ class Window(QMainWindow):
             self.catalog_future = None
         if clear:
             self.results = []
+            self.displayed_search_diagnostics = None
             self.show_album_header()
             self.result_list.clear()
             self.selected_button.setEnabled(False)
@@ -781,6 +819,11 @@ class Window(QMainWindow):
                         result = None
                     if result is not None:
                         self.results = result
+                        self.displayed_search_diagnostics = None
+                        if isinstance(result, SearchResults):
+                            self.last_search_diagnostics = result.diagnostics
+                            self.displayed_search_diagnostics = result.diagnostics
+                            self.copy_search_button.setEnabled(True)
                         self.album_tracks = (
                             tuple(result)
                             if self.pending_album_title
@@ -833,6 +876,11 @@ class Window(QMainWindow):
                                 else "try another query/storefront or paste an Apple Music URL"
                             )
                         )
+                        if isinstance(result, SearchResults):
+                            self.catalog_status.setText(
+                                f"Results for “{result.diagnostics['query']}” · "
+                                + self.catalog_status.text()
+                            )
                 except CatalogDeferred as exc:
                     if exc.rate_limited:
                         self.catalog_retries += 1

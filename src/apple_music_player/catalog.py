@@ -18,16 +18,44 @@ class CatalogDeferred(Exception):
         self.rate_limited = rate_limited
 
 
+class SearchResults(list):
+    def __init__(self, values, diagnostics):
+        super().__init__(values)
+        self.diagnostics = diagnostics
+
+
+def public_text(value, limit=300):
+    if not isinstance(value, str):
+        return ""
+    return "".join(c for c in value if c.isprintable())[:limit]
+
+
+def public_result(row):
+    # Strict public-metadata allowlist; never retain arbitrary response fields/URLs.
+    if not isinstance(row, dict):
+        return {"type": "invalid row"}
+    identifier = str(row.get("trackId", row.get("collectionId", "")))
+    return {
+        "id": identifier if re.fullmatch(r"[0-9]{1,30}", identifier) else "",
+        "title": public_text(row.get("trackName", row.get("collectionName", ""))),
+        "artist": public_text(row.get("artistName", "")),
+        "wrapper_type": public_text(row.get("wrapperType", ""), 40),
+        "kind": public_text(row.get("kind", row.get("collectionType", "")), 40),
+    }
+
+
 class Catalog:
     def __init__(self):
         self.last_request = 0.0
         self.responses = {}
         self.response_times = {}
         self.not_before = 0.0
+        self.last_response_source = None
 
     def request(self, endpoint, **params):
         key = endpoint + "?" + urlencode(params)
         if key in self.responses and time.monotonic() - self.response_times.get(key, 0) < 3600:
+            self.last_response_source = (key, "memory cache")
             return self.responses[key]
         delay = max(self.last_request + 3, self.not_before) - time.monotonic()
         if delay > 0:
@@ -70,14 +98,23 @@ class Catalog:
             self.response_times.clear()
         self.responses[key] = data
         self.response_times[key] = time.monotonic()
+        self.last_response_source = (key, "network")
         return data
 
     def tracks(self, data, country):
         result = []
         for row in data:
-            if row.get("kind") != "song" or not str(row.get("trackId", "")).isdigit():
+            if (
+                not isinstance(row, dict)
+                or row.get("kind") != "song"
+                or not str(row.get("trackId", "")).isdigit()
+            ):
                 continue
-            title = f"{row.get('trackName', 'Untitled')} — {row.get('artistName', '')}"
+            title = (
+                public_text(row.get("trackName", "Untitled"))
+                + " — "
+                + public_text(row.get("artistName", ""))
+            )
             result.append(
                 Track(
                     country,
@@ -104,11 +141,16 @@ class Catalog:
             Album(
                 country,
                 str(row["collectionId"]),
-                f"{row.get('collectionName', 'Untitled')} — {row.get('artistName', '')}"[:300],
+                (
+                    public_text(row.get("collectionName", "Untitled"))
+                    + " — "
+                    + public_text(row.get("artistName", ""))
+                )[:300],
                 **self.metadata(row),
             )
             for row in data
-            if row.get("wrapperType") == "collection"
+            if isinstance(row, dict)
+            and row.get("wrapperType") == "collection"
             and row.get("collectionType") == "Album"
             and re.fullmatch(r"[0-9]+", str(row.get("collectionId", "")))
         ]
@@ -141,17 +183,35 @@ class Catalog:
         if entity not in {"song", "album"}:
             raise PlayerError("Choose Songs or Albums.")
         parse = self.albums if entity == "album" else self.tracks
-        return parse(
-            self.request(
-                "search",
-                term=query[:200],
-                country=country,
-                media="music",
-                entity=entity,
-                limit=200 if entity == "album" else 50,
-            ),
-            country,
+        params = dict(
+            term=query[:200],
+            country=country,
+            media="music",
+            entity=entity,
+            limit=200 if entity == "album" else 50,
         )
+        key = "search?" + urlencode(params)
+        rows = self.request("search", **params)
+        accepted = parse(rows, country)
+        source = self.last_response_source
+        diagnostics = {
+            "endpoint": "https://itunes.apple.com/search",
+            "query": public_text(params["term"], 200),
+            "storefront": country,
+            "media": "music",
+            "entity": entity,
+            "limit": params["limit"],
+            "source": source[1] if source and source[0] == key else "adapter (source unavailable)",
+            "raw_result_count": len(rows),
+            "accepted_result_count": len(accepted),
+            "details_truncated": len(rows) > 200 or len(accepted) > 200,
+            "raw_public_results": [public_result(row) for row in rows[:200]],
+            "accepted_results": [
+                {"id": item.id, "title": public_text(item.title), "storefront": item.country}
+                for item in accepted[:200]
+            ],
+        }
+        return SearchResults(accepted, diagnostics)
 
     def album(self, album_id, country):
         rows = self.request("lookup", id=album_id, country=country, entity="song", limit=200)

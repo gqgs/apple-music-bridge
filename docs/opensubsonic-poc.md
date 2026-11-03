@@ -483,3 +483,26 @@ avoid automatic album/song expansion to realize the latency benefit.
 specifies limits from 1 to 200 and recommends reducing requested result counts for
 response time. Its documented search parameters do not include an offset. The
 bridge's prefix-and-slice approach makes that limitation explicit.
+
+### Artist counts and portraits
+
+Artist search/index entries omit optional `albumCount`, `coverArt` and
+`artistImageUrl`: public artist search does not supply a verified total discography
+count or a supported portrait source in this integration. Counting remembered
+album rows only measured previous browsing, so that value is no longer presented
+as an artist total. `getArtist.albumCount` still counts the albums actually returned
+in that response, subject to the public lookup limit and storefront coverage.
+
+[OpenSubsonic ArtistID3](https://opensubsonic.netlify.app/docs/responses/artistid3/)
+makes those fields optional. Clients that decode missing counts into a plain integer
+must hide the unknown card count rather than display zero as a verified total.
+No count-enrichment lookup is performed per search card. Artist images remain
+unavailable; album artwork is not repurposed as a portrait. Explicit requests for
+an old artist cover ID continue to receive a neutral placeholder for compatibility,
+but new responses no longer advertise that placeholder as available artwork.
+
+Album-only client search (`artistCount=0`, `albumCount=50`, `songCount=0`) is covered
+by an authenticated HTTP regression: exactly one upstream album request, limit 50.
+Clients must also stop eagerly expanding artist/song matches; otherwise the earlier
+multi-request latency returns. A live public artist-response check was unavailable
+through the web tool during this change; no new portrait endpoint or URL was guessed.

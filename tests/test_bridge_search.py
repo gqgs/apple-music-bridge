@@ -126,7 +126,7 @@ def test_metadata_counts_are_batched_and_invalidated(tmp_path, monkeypatch):
     monkeypatch.setattr(core, "known", known)
     try:
         for _ in range(200):
-            assert core.describe(ARTIST)["albumCount"] == 1
+            assert "albumCount" not in core.describe(ARTIST)
             assert core.describe(ALBUM)["songCount"] == 1
         assert calls == ["album", "song"]
         core.remember([replace(TRACK, id="4")])
@@ -607,7 +607,10 @@ def test_catalog_limits_preserve_qt_defaults(monkeypatch):
     assert len(requests) == 3
 
 
-def test_http_artist_only_search_uses_one_requested_upstream_limit(bridge, monkeypatch):
+@pytest.mark.parametrize("kind,entity", [("artist", "musicArtist"), ("album", "album")])
+def test_http_category_only_search_uses_one_requested_upstream_limit(
+    bridge, monkeypatch, kind, entity
+):
     from apple_music_player.catalog import Catalog
 
     server, _ = bridge
@@ -620,14 +623,33 @@ def test_http_artist_only_search_uses_one_requested_upstream_limit(bridge, monke
         return io.BytesIO(b'{"results": []}')
 
     monkeypatch.setattr("apple_music_player.catalog.urlopen", opened)
-    result = payload(
-        server,
-        "search3",
-        {"query": "bjork", "artistCount": "50", "albumCount": "0", "songCount": "0"},
-    )
+    params = {"query": "bjork", "artistCount": "0", "albumCount": "0", "songCount": "0"}
+    params[kind + "Count"] = "50"
+    result = payload(server, "search3", params)
     assert result["status"] == "ok"
     assert result["searchResult3"] == {"artist": [], "album": [], "song": []}
     assert len(requests) == 1
-    assert requests[0]["entity"] == ["musicArtist"]
+    assert requests[0]["entity"] == [entity]
     assert requests[0]["limit"] == ["50"]
     assert requests[0]["country"] == ["br"]
+
+
+def test_artist_search_count_and_portrait_are_unknown_despite_cached_albums(bridge):
+    import xml.etree.ElementTree as ET
+
+    server, _ = bridge
+    server.actor.call("remember", [ARTIST, ALBUM, replace(ALBUM, id="99")])
+    params = {"query": "fixture", "artistCount": "50", "albumCount": "0", "songCount": "0"}
+    artist = payload(server, "search3", params)["searchResult3"]["artist"][0]
+    assert artist == {"id": "am:br:lossless:artist:1", "name": ARTIST.title}
+    status, _, body = request(server, "search3", dict(params, f="xml"))
+    assert status == 200
+    node = ET.fromstring(body).find(".//{http://subsonic.org/restapi}artist")
+    assert node is not None
+    assert "albumCount" not in node.attrib and "coverArt" not in node.attrib
+    # Detail count describes this returned collection, not remembered albums or a
+    # claim that the limited public lookup is a complete subscription discography.
+    detail = payload(server, "getArtist", {"id": artist["id"]})["artist"]
+    assert detail["albumCount"] == len(detail["album"]) == 1
+    assert "coverArt" not in detail and "artistImageUrl" not in detail
+    assert payload(server, "search3", params)["searchResult3"]["artist"][0] == artist

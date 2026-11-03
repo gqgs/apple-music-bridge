@@ -230,10 +230,12 @@ class Core:
         return self._counts
 
     def describe(self, item):
-        result = {"id": self.identity(item), "name": item.title, "coverArt": self.identity(item)}
+        result = {"id": self.identity(item), "name": item.title}
         if isinstance(item, Artist):
-            result["albumCount"] = self.child_counts()[0][item.id]
+            # Public artist search supplies neither a discography count nor a
+            # verified portrait. Optional fields stay absent, not cache-derived.
             return result
+        result["coverArt"] = self.identity(item)
         result.update(
             name=item.album_title if isinstance(item, Album) else item.track_name or item.title,
             artist=item.artist,

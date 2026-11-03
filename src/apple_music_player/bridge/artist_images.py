@@ -13,7 +13,7 @@ from email.utils import parsedate_to_datetime
 from hashlib import sha256
 from html.parser import HTMLParser
 from urllib.error import HTTPError, URLError
-from urllib.parse import unquote, urlencode, urlsplit
+from urllib.parse import parse_qsl, unquote, urlencode, urlsplit
 from urllib.request import Request, build_opener
 
 from ..artwork import MAX_BYTES, ArtworkRedirect, decode
@@ -24,6 +24,7 @@ from .artwork import CoverUnavailable, png
 UUID = r"[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}"
 UA = "AppleMusicPlayerBridge/0.1 (+https://github.com/gqgs/apple-music-player)"
 RECORD_LIMIT = 3 * 1024**2
+NEGATIVE_VERSION = 2
 
 
 class Missing(Exception):
@@ -43,6 +44,13 @@ def safe_reason(reason):
         reason
         in {
             "image-unavailable",
+            "commons-title-invalid",
+            "commons-page-unavailable",
+            "commons-imageinfo-missing",
+            "commons-thumbnail-missing",
+            "commons-thumbnail-rejected",
+            "musicbrainz-identity-mismatch",
+            "wikidata-entity-mismatch",
             "identity-missing",
             "identity-ambiguous",
             "attribution-unavailable",
@@ -135,7 +143,29 @@ def secure_url(url, host, path_prefix):
 
 
 def image_url(url):
-    return secure_url(url, "upload.wikimedia.org", "/wikipedia/commons/")
+    if not isinstance(url, str) or len(url) > 2048:
+        return False
+    try:
+        parts = urlsplit(url)
+        prefix = {
+            "upload.wikimedia.org": "/wikipedia/commons/",
+            "thumb.wikimedia.org": "/wikipedia/commons/thumb/",
+        }.get(parts.hostname)
+        if not prefix or not secure_url(parts._replace(query="").geturl(), parts.hostname, prefix):
+            return False
+        if any(segment in {".", ".."} for segment in unquote(parts.path).split("/")):
+            return False
+        # MediaWiki's documented public-media provenance fields, not arbitrary queries.
+        fields = parse_qsl(
+            parts.query, keep_blank_values=True, strict_parsing=True, max_num_fields=3
+        )
+        return len({key for key, _ in fields}) == len(fields) and all(
+            key in {"utm_source", "utm_campaign", "utm_content"}
+            and re.fullmatch(r"[A-Za-z0-9._-]{1,128}", value)
+            for key, value in fields
+        )
+    except (ValueError, TypeError):
+        return False
 
 
 def file_title(url):
@@ -362,7 +392,7 @@ def commons(title, mbid, origin, stop):
         or len(title) > 300
         or "|" in title
     ):
-        raise Missing()
+        raise Missing("commons-title-invalid")
     query = urlencode(
         dict(
             action="query",
@@ -379,15 +409,17 @@ def commons(title, mbid, origin, stop):
     data = metadata("https://commons.wikimedia.org/w/api.php?" + query, stop)
     pages = data.get("query", {}).get("pages", {})
     if not isinstance(pages, dict) or len(pages) != 1:
-        raise Missing()
+        raise Missing("commons-page-unavailable")
     images = next(iter(pages.values())).get("imageinfo", [])
     if not images:
-        raise Missing()
+        raise Missing("commons-imageinfo-missing")
     info = images[0]
     credits = provenance(info, mbid, origin)
     url = info.get("thumburl", "")
+    if not url:
+        raise Missing("commons-thumbnail-missing")
     if not image_url(url):
-        raise Missing()
+        raise Missing("commons-thumbnail-rejected")
     raw = fetch(url, stop, image=True)
     return png(decode(raw, 500)), credits
 
@@ -410,7 +442,7 @@ def resolve(artist, stop):
     mbid = matches.pop()
     data = metadata(f"https://musicbrainz.org/ws/2/artist/{mbid}?inc=url-rels&fmt=json", stop)
     if data.get("id") != mbid:
-        raise Missing()
+        raise Missing("musicbrainz-identity-mismatch")
     titles, wikidata = set(), set()
     for rel in data.get("relations", []):
         url = rel.get("url", {}).get("resource", "")
@@ -438,7 +470,7 @@ def resolve(artist, stop):
     data = metadata("https://www.wikidata.org/w/api.php?" + query, stop)
     entity = data.get("entities", {}).get(qid, {})
     if entity.get("id") != qid:
-        raise Missing()
+        raise Missing("wikidata-entity-mismatch")
     claims = [c for c in entity.get("claims", {}).get("P18", []) if c.get("rank") != "deprecated"]
     preferred = [c for c in claims if c.get("rank") == "preferred"]
     titles = set()
@@ -492,6 +524,12 @@ class ArtistImages:
             if not 0 < value["until"] - time.time() <= 7 * 86400:
                 return None
             if value["status"] == "missing":
+                # Older generic misses may be valid Wikimedia URLs rejected by v1.
+                if (
+                    value.get("reason", "image-unavailable") == "image-unavailable"
+                    and value.get("resolver_version") != NEGATIVE_VERSION
+                ):
+                    return None
                 return b"", {"reason": safe_reason(value.get("reason", "image-unavailable"))}
             if value["status"] == "retry":
                 raise ResolutionFailure(value.get("reason", "cached-retry"))
@@ -555,7 +593,12 @@ class ArtistImages:
         except Missing as exc:
             self.write(
                 key,
-                dict(status="missing", until=time.time() + 86400, reason=safe_reason(exc.reason)),
+                dict(
+                    status="missing",
+                    until=time.time() + 86400,
+                    reason=safe_reason(exc.reason),
+                    resolver_version=NEGATIVE_VERSION,
+                ),
             )
             return b"", {"reason": safe_reason(exc.reason)}
         except Exception as exc:

@@ -89,7 +89,10 @@ image finishes. JSON and XML require the existing bridge authentication.
   killed and can finish after the cooperative deadline. Shutdown cancels queued
   work and interrupts waits; no new requests start after cancellation.
 - HTTPS only, fixed API hosts, metadata redirects refused, image redirects limited
-  to `upload.wikimedia.org/wikipedia/commons/`. JSON is capped at 256 KiB, source
+  to the exact `upload.wikimedia.org` Commons path or
+  `thumb.wikimedia.org/wikipedia/commons/thumb/`. Only the documented, bounded
+  `utm_source`, `utm_campaign`, and `utm_content` query fields are accepted;
+  credentials, fragments, other hosts/queries and path traversal are rejected. JSON is capped at 256 KiB, source
   images at 2 MiB/2048 pixels per dimension, decoded thumbnails at 500 pixels.
   Only decoded JPEG/PNG/WebP inputs are accepted; output is verified PNG.
 - Private `artist-images/` under the bridge cache stores atomic image+credit records,
@@ -212,3 +215,30 @@ Synthetic tests cover the real bridge HTTP path, successful/missing images, auth
 errors and list/single/empty provider response shapes. This diagnostic is intended
 to obtain the missing live evidence, not claim that a live provider or client UI has
 already been verified.
+
+### Wikimedia thumbnail URL update
+
+Wikimedia moved thumbnail delivery to `thumb.wikimedia.org` in 2026, and MediaWiki
+can append `utm_source`, `utm_campaign` and `utm_content` provenance parameters.
+Our original upload-only/no-query validator rejected those legitimate returned
+URLs before fetching them, yielding the generic `image-unavailable` result. The
+validator now permits both documented CDN hosts and the three bounded provenance
+fields, while retaining HTTPS, Commons path restrictions, redirect validation,
+byte/dimension limits, decoding and attribution checks. We use the returned URL;
+we do not invent or rewrite a thumbnail address.
+
+Sources: [Wikimedia Thumbor infrastructure](https://wikitech.wikimedia.org/wiki/Thumbor)
+and [MediaWiki provenance configuration](https://www.mediawiki.org/wiki/Manual:$wgTrackMediaRequestProvenance).
+The former explicitly documents the 2026 host change; the latter documents the
+three parameters and their meanings. These establish a compatibility defect, not
+proof that any particular artist has a usable, licensed image.
+
+Old generic `image-unavailable` cache entries are retried once under the corrected
+resolver. Positive entries and specific misses keep their existing expiry. Newly
+missing results include precise categories such as `commons-imageinfo-missing`,
+`commons-thumbnail-missing`, `commons-thumbnail-rejected`,
+`musicbrainz-identity-mismatch`, or `wikidata-entity-mismatch`. No cache deletion is
+needed. A regression using the documented thumbnail shape returns HTTP 503 under
+the old validator and a verified PNG with the new validator; it also exercises old
+negative-cache recovery and restart. Live provider fetching remains unverified in
+the agent environment.

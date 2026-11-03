@@ -708,3 +708,136 @@ def test_pending_portrait_http_is_503_then_completed_lookup_is_png(bridge, monke
     assert status == 200 and body.startswith(b"\x89PNG")
     assert headers.get_all("Cache-Control") == ["private, max-age=86400"]
     assert len(jobs) == 1
+
+
+PROVENANCE_QUERY = "?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=thumbnail"
+NEW_IMAGE = IMAGE.replace("upload.wikimedia.org", "thumb.wikimedia.org") + PROVENANCE_QUERY
+
+
+@pytest.mark.parametrize("host", ["upload.wikimedia.org", "thumb.wikimedia.org"])
+@pytest.mark.parametrize("query", ["", PROVENANCE_QUERY])
+def test_documented_wikimedia_image_hosts_and_provenance(host, query):
+    url = IMAGE.replace("upload.wikimedia.org", host) + query
+    assert mod.image_url(url)
+    from urllib.request import Request
+
+    request = ArtworkRedirect(mod.image_url).redirect_request(
+        Request(IMAGE), None, 302, "", {}, url
+    )
+    assert request.full_url == url
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        NEW_IMAGE.replace("https:", "http:"),
+        NEW_IMAGE.replace("thumb.wikimedia.org", "thumb.wikimedia.org.evil.invalid"),
+        NEW_IMAGE.replace("thumb.wikimedia.org", "user:password@thumb.wikimedia.org"),
+        NEW_IMAGE.replace("thumb.wikimedia.org", "thumb.wikimedia.org:8443"),
+        NEW_IMAGE.replace("/commons/thumb/", "/en/thumb/"),
+        NEW_IMAGE.replace("/commons/thumb/", "/commons/"),
+        IMAGE + "?redirect=https://evil.invalid",
+        IMAGE + "?utm_source=a&utm_source=b",
+        IMAGE + "?utm_source=" + "x" * 129,
+        IMAGE + "?utm_source=%0aheader",
+        NEW_IMAGE + "#fragment",
+        IMAGE.replace("/thumb/", "/thumb/%2e%2e/"),
+    ],
+)
+def test_wikimedia_query_and_redirect_restrictions(url):
+    assert not mod.image_url(url)
+    with pytest.raises(ValueError):
+        ArtworkRedirect(mod.image_url).redirect_request(None, None, 302, "", {}, url)
+
+
+def test_new_thumbnail_contract_recovers_old_generic_miss_over_http(bridge, monkeypatch, tmp_path):
+    import time
+    from types import SimpleNamespace
+
+    from PySide6.QtGui import QImage
+    from test_bridge_artwork import raw_cover_response
+
+    server, _ = bridge
+    server.actor.core.artist_images = True
+    service = server.artist_images = mod.ArtistImages(tmp_path / "portraits")
+    server.actor.call("remember", [ARTIST])
+    service.write(
+        service.key(ARTIST),
+        {"status": "missing", "reason": "image-unavailable", "until": time.time() + 86400},
+    )
+    real_fetch = mod.fetch
+    provider(monkeypatch)
+    fixture_fetch = mod.fetch
+    headers = Message()
+    headers["Content-Type"] = "image/png"
+    fetched = []
+
+    class Response(io.BytesIO):
+        url = NEW_IMAGE
+
+    Response.headers = headers
+
+    class Opener:
+        def open(self, request, timeout):
+            fetched.append(request.full_url)
+            assert request.get_header("Authorization") is None
+            return Response(image_bytes("PNG"))
+
+    monkeypatch.setattr(mod, "build_opener", lambda *_: Opener())
+    monkeypatch.setattr(mod, "WIKI_GATE", SimpleNamespace(enter=lambda _: None))
+
+    def modern_fetch(url, stop, image=False):
+        if image:
+            return real_fetch(url, stop, image=True)
+        data = fixture_fetch(url, stop)
+        if urlsplit(url).hostname == "commons.wikimedia.org":
+            data = json.loads(data)
+            data["query"]["pages"]["1"]["imageinfo"][0]["thumburl"] = NEW_IMAGE
+            return json.dumps(data).encode()
+        return data
+
+    monkeypatch.setattr(mod, "fetch", modern_fetch)
+    for _ in range(2):
+        status, headers, body = raw_cover_response(server, "artist-image:am:br:lossless:artist:1")
+        assert status == 200 and not QImage.fromData(body).isNull()
+        assert headers["X-Artwork-Status"] == "available"
+    assert fetched == [NEW_IMAGE]
+    assert service.info(ARTIST)["status"] == "ready"
+    service.close()
+    server.artist_images = mod.ArtistImages(service.root)
+    assert server.artist_images.info(ARTIST)["status"] == "ready"
+
+
+@pytest.mark.parametrize(
+    "mutation,reason",
+    [
+        ("pages", "commons-page-unavailable"),
+        ("imageinfo", "commons-imageinfo-missing"),
+        ("missing_thumb", "commons-thumbnail-missing"),
+        ("unsafe_thumb", "commons-thumbnail-rejected"),
+    ],
+)
+def test_specific_commons_missing_reasons(monkeypatch, mutation, reason):
+    provider(monkeypatch)
+    original = mod.fetch
+
+    def changed(url, stop, image=False):
+        data = original(url, stop, image=image)
+        if urlsplit(url).hostname == "commons.wikimedia.org":
+            data = json.loads(data)
+            page = data["query"]["pages"]["1"]
+            if mutation == "pages":
+                data["query"]["pages"] = {}
+            elif mutation == "imageinfo":
+                page["imageinfo"] = []
+            elif mutation == "missing_thumb":
+                page["imageinfo"][0].pop("thumburl")
+            else:
+                page["imageinfo"][0]["thumburl"] = "https://evil.invalid/image"
+            return json.dumps(data).encode()
+        return data
+
+    monkeypatch.setattr(mod, "fetch", changed)
+    with pytest.raises(mod.Missing) as result:
+        mod.resolve(ARTIST, threading.Event())
+    assert result.value.reason == reason

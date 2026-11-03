@@ -457,8 +457,13 @@ class Window(QMainWindow):
                 for index, item in enumerate(self.results):
                     if isinstance(item, Artist):
                         continue
+                    row = self.result_list.item(index)
+                    if row is None or not self.result_list.visualItemRect(row).intersects(
+                        self.result_list.viewport().rect()
+                    ):
+                        continue
                     image = self.artwork.get(item.artwork_url)
-                    if not image.isNull() and index < self.result_list.count():
+                    if not image.isNull():
                         set_artwork_icon(self.result_list.item(index), image)
             else:
                 for index in range(self.result_list.count()):

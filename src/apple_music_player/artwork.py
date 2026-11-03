@@ -56,7 +56,7 @@ class ArtworkRedirect(HTTPRedirectHandler):
         return super().redirect_request(req, fp, code, msg, headers, newurl)
 
 
-def decode(data):
+def decode(data, max_dimension=256):
     if len(data) > MAX_BYTES:
         raise ValueError("Artwork too large")
     buffer = QBuffer()
@@ -74,15 +74,18 @@ def decode(data):
     image = reader.read()
     if image.isNull():
         raise ValueError("Corrupt artwork")
-    if max(image.width(), image.height()) > 256:
-        image = image.scaled(256, 256, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+    if max(image.width(), image.height()) > max_dimension:
+        image = image.scaled(
+            max_dimension, max_dimension, Qt.KeepAspectRatio, Qt.SmoothTransformation
+        )
     return image
 
 
 class ArtworkCache:
-    def __init__(self, root, limit=32 * 1024**2, validator=allowed_url):
+    def __init__(self, root, limit=32 * 1024**2, validator=allowed_url, max_dimension=256):
         self.root = private_dir(root)
         self.allowed_url = validator
+        self.max_dimension = max_dimension
         self.limit = limit
         self.lock = threading.Lock()
         self.failures = {}
@@ -121,7 +124,7 @@ class ArtworkCache:
                     try:
                         if time.time() - path.stat().st_mtime < 7 * 86400:
                             with path.open("rb") as stream:
-                                image = decode(stream.read(MAX_BYTES + 1))
+                                image = decode(stream.read(MAX_BYTES + 1), self.max_dimension)
                             os.utime(path, None)
                             return image
                     except (ValueError, OSError):
@@ -152,7 +155,7 @@ class ArtworkCache:
                     chunks.append(chunk)
                     size += len(chunk)
                 data = b"".join(chunks)
-            image = decode(data)
+            image = decode(data, self.max_dimension)
             if len(data) <= self.limit:
                 with self.lock:
                     safe_path(self.root, path)

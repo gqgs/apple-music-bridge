@@ -108,22 +108,23 @@ completion and depend on client/container behavior.
 
 ## Artwork fetching and format
 
-Album and song covers use the returned public catalog artwork URL unchanged.
+Album and song covers use the public catalog artwork URL as their source and fallback.
 Songs without their own URL resolve their album; artists without a verified
 portrait return the neutral placeholder (an album cover is not a portrait).
 Only HTTPS `isN-ssl.mzstatic.com` URLs on port 443 are accepted, including redirects.
 No URL, HTTP body or upstream diagnostic is printed. Authentication remains required.
 
 Two dedicated workers fetch covers outside the serialized catalog/media worker.
-Duplicate in-flight URLs share work; at most four HTTP callers wait for artwork,
-leaving server capacity for other requests. Each caller waits at most 20 seconds;
+Duplicate in-flight URLs (including size variants) share work; at most four HTTP callers wait for artwork,
+leaving server capacity for other requests. Each caller has a shared 20-second waiting budget for the variant and fallback;
 fetches use 8-second socket timeouts, a 15-second read-loop deadline and a 2 MiB
 body cap. OS DNS resolution is not a hard wall-clock timeout; a stuck resolver can
 occupy an artwork worker but cannot occupy the catalog worker. Shutdown cancels
 queued artwork; already running workers finish subject to these limits.
 
 The existing safe image cache validates JPEG/PNG/WebP content and dimensions
-(maximum 2048 per side), then scales down to at most 256 pixels without upscaling.
+(maximum 2048 per side), then scales down to at most 1024 pixels in the bridge, without upscaling.
+The desktop image pipeline retains its previous 256-pixel limit.
 The bridge re-encodes decoded images as **PNG**, with `Content-Type: image/png`.
 This avoids relying on URL suffixes or sending unsupported source formats directly
 to clients. It uses existing PySide6 image codecs without a GUI/application window;
@@ -144,9 +145,31 @@ Apple's [iTunes Search API](https://performance-partners.apple.com/search-api)
 documents `artworkUrl100` as a 100×100 URL, returned only when available. It does
 not document rewriting `100x100bb.jpg` to request another size or format.
 [Apple Music API artwork templates](https://developer.apple.com/videos/play/wwdc2022/10148/)
-support `{w}`/`{h}` substitution, but are a different API contract. The bridge does
-not assume those templates or format negotiation apply to iTunes URLs; requesting
-`size` from this bridge does not manufacture higher-resolution source artwork.
+support `{w}`/`{h}` substitution, but are a different API contract. The bridge
+therefore treats CDN size substitution as a best-effort convention,
+not an API guarantee. Only an allowlisted `/image/thumb/` URL whose final filename
+is a square numeric size followed by `bb.jpg`, `bb.jpeg`, `bb.png` or `bb.webp` is
+eligible. Query-bearing URLs and unknown shapes are never rewritten. The host,
+asset path and format suffix remain unchanged. There is no assumed format negotiation.
+
+The client `size` parameter defaults to 512; values up to 4096 are accepted and
+capped at 1024 (zero uses the default). Requests above the source's named size try
+one of four buckets: 128, 256, 512 or 1024 pixels. A failed, corrupt or unsupported
+variant falls back to the original URL within the same waiting budget; if the
+variant consumes the budget, this request returns a placeholder, and a subsequent
+request can use the fallback while the failed variant is cooling down. Valid
+images are downscaled to the requested limit but never enlarged. Variant URLs
+have distinct cache keys under the same disk/concurrency/validation limits.
+Missing or invalid variants follow the existing negative-cache rules rather than
+being retried on every client request. A successful higher-resolution image is not
+a guarantee of sharpness: Apple may return smaller or upsampled artwork.
+
+Supersonic source confirms it passes a positive requested size to `getCoverArt`.
+Tests verify dimensions above 256, client sizing, rejected variants falling back,
+unknown/query-bearing URLs, PNG output and distinct cached variants. The CDN
+substitution has not been verified against live Apple image responses here. A
+public image URL from Apple documentation failed with a network error at the
+original 100-pixel request in this environment; no alternate fetch route was tried.
 Live Apple responses and actual Supersonic display still need user testing; automated
 coverage uses synthetic JPEG, PNG, WebP, malformed bodies and mocked transports.
 

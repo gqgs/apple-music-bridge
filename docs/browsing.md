@@ -53,3 +53,9 @@ The documented music search entity is `musicArtist`; album lookup uses `id=<arti
 **Copy search diagnostics** now includes the last explicitly opened artist-album lookup alongside the last search: endpoint, artist ID, country, raw count and allowlisted public result IDs/titles. Home release lookups do not replace it. Diagnostics remain in memory until explicitly copied. This allows comparing the Faye Webster search with exact artist lookup without account files or raw logs. The reported missing Atlanta Millionaires Club / unrelated search result is still unresolved: live iTunes responses could not be verified in this environment, and fixture tests do not establish catalog coverage.
 
 Synthetic artist-search previews: [normal viewport](artist-search.png) and [small viewport at 150% scale](artist-search-small.png). These use neutral fixture artists and no account, runtime or live artwork.
+
+## Search repaint stability
+
+The 100 ms status poll previously assigned new icons/pixmaps even when their source image was unchanged. A sustained 19-row synthetic search produced 228 model changes in 1.2 seconds in Albums and Songs. Decoration updates now compare the source image identity (including the placeholder state), so idle polls do not mutate row decorations, covers or the shared badge. Artwork completion/failure and explicit retries still update normally. The same normal/high-DPI probe now observes zero idle row changes; Artists also remains at zero.
+
+Six real-event-loop regression cases cover all search modes with delayed artwork success/failure, preserving selection, scroll and the existing detail widget. [Normal](search-stable.png) and [small/high-DPI](search-stable-small.png) screenshots use synthetic fixtures, not the user's recording. The supplied recording could not be transferred for inspection; the fix is grounded in independent reproduction, not claimed visual confirmation of that recording.

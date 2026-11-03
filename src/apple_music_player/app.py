@@ -7,7 +7,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from PySide6.QtCore import QSize, Qt, QTimer, QUrl
-from PySide6.QtGui import QDesktopServices, QIcon, QPixmap
+from PySide6.QtGui import QDesktopServices, QIcon, QImage
 from PySide6.QtWidgets import (
     QApplication,
     QComboBox,
@@ -30,7 +30,14 @@ from PySide6.QtWidgets import (
 )
 
 from .artwork import BADGE_URL, Artwork, allowed_url
-from .browsing import AlbumCard, AlbumHeader, Shelf, TrackRowDelegate, placeholder, store_link
+from .browsing import (
+    AlbumCard,
+    AlbumHeader,
+    Shelf,
+    TrackRowDelegate,
+    set_artwork_icon,
+    store_link,
+)
 from .cache import Cache
 from .catalog import (
     ArtistAlbums,
@@ -433,7 +440,7 @@ class Window(QMainWindow):
         badge_ready = badge is not None and not badge.isNull()
         self.badge_strip.setVisible(badge_ready)
         if badge_ready:
-            self.store_badge.setIcon(QIcon(QPixmap.fromImage(badge)))
+            set_artwork_icon(self.store_badge, badge)
             self.store_badge.setAccessibleName("View " + self.badge_album.title + " in iTunes")
             self.badge_caption.setText("Album artwork · Store link: " + self.badge_album.title)
         if self.pages.currentIndex() == 0:
@@ -452,11 +459,11 @@ class Window(QMainWindow):
                         continue
                     image = self.artwork.get(item.artwork_url)
                     if not image.isNull() and index < self.result_list.count():
-                        self.result_list.item(index).setIcon(QIcon(QPixmap.fromImage(image)))
+                        set_artwork_icon(self.result_list.item(index), image)
             else:
                 for index in range(self.result_list.count()):
                     if not isinstance(self.results[index], Artist):
-                        self.result_list.item(index).setIcon(placeholder())
+                        set_artwork_icon(self.result_list.item(index), QImage())
         if self.now_card:
             self.now_card.refresh()
 
@@ -910,7 +917,7 @@ class Window(QMainWindow):
                             )
                             for index, item in enumerate(self.results):
                                 if not isinstance(item, Artist):
-                                    self.result_list.item(index).setIcon(placeholder())
+                                    set_artwork_icon(self.result_list.item(index), QImage())
                         if self.results:
                             self.result_list.setCurrentRow(0)
                         albums = self.pending_result_kind in {"albums", "artist_albums"}

@@ -3,7 +3,7 @@
 from urllib.parse import urlsplit
 
 from PySide6.QtCore import QEvent, QRect, QSize, Qt, Signal
-from PySide6.QtGui import QColor, QIcon, QPalette, QPixmap
+from PySide6.QtGui import QColor, QIcon, QImage, QPalette, QPixmap
 from PySide6.QtWidgets import (
     QApplication,
     QFrame,
@@ -41,6 +41,33 @@ def placeholder():
     pixmap = QPixmap(100, 100)
     pixmap.fill(QColor("#264653"))
     return QIcon(pixmap)
+
+
+def set_artwork_icon(target, image):
+    """Change decoration only when its source image changes, not on every poll."""
+    key = image.cacheKey() if not image.isNull() else 0
+    role = Qt.UserRole + 10
+    is_item = not isinstance(target, QWidget)
+    previous = target.data(role) if is_item else getattr(target, "_artwork_key", None)
+    if previous == key:
+        return
+    if is_item:
+        target.setData(role, key)
+    else:
+        target._artwork_key = key
+    target.setIcon(QIcon(QPixmap.fromImage(image)) if key else placeholder())
+
+
+def set_artwork_pixmap(target, image):
+    key = image.cacheKey() if not image.isNull() else 0
+    if getattr(target, "_artwork_key", None) == key:
+        return
+    target._artwork_key = key
+    target.setPixmap(
+        QPixmap.fromImage(image).scaled(100, 100, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+        if key
+        else placeholder().pixmap(100, 100)
+    )
 
 
 class TrackRowDelegate(QStyledItemDelegate):
@@ -91,7 +118,7 @@ class AlbumCard(QFrame):
         layout = QVBoxLayout(self)
         layout.setAlignment(Qt.AlignTop)
         self.cover = QPushButton()
-        self.cover.setIcon(placeholder())
+        set_artwork_icon(self.cover, QImage())
         self.cover.setIconSize(QSize(100, 100))
         self.cover.setFixedHeight(110)
         self.cover.setAccessibleName("Open " + album.title)
@@ -126,11 +153,11 @@ class AlbumCard(QFrame):
             return
         badge = self.artwork.get(BADGE_URL)
         if badge.isNull():
-            self.cover.setIcon(placeholder())
+            set_artwork_icon(self.cover, QImage())
             return
         image = self.artwork.get(self.album.artwork_url)
         if not image.isNull():
-            self.cover.setIcon(QIcon(QPixmap.fromImage(image)))
+            set_artwork_icon(self.cover, image)
 
 
 class AlbumHeader(QWidget):
@@ -142,7 +169,7 @@ class AlbumHeader(QWidget):
         row = QHBoxLayout(self)
         self.cover = QLabel()
         self.cover.setFixedSize(100, 100)
-        self.cover.setPixmap(placeholder().pixmap(100, 100))
+        set_artwork_pixmap(self.cover, QImage())
         row.addWidget(self.cover, 0, Qt.AlignTop)
         text = QVBoxLayout()
         self.title = QLabel()
@@ -170,21 +197,17 @@ class AlbumHeader(QWidget):
             self.details.setText(
                 " · ".join(x for x in (album.release_date[:10], f"{count} tracks") if x)
             )
-            self.cover.setPixmap(placeholder().pixmap(100, 100))
+            set_artwork_pixmap(self.cover, QImage())
 
     def refresh(self):
         if not self.album or not allowed_url(self.album.artwork_url):
             return
         if self.artwork.get(BADGE_URL).isNull():
-            self.cover.setPixmap(placeholder().pixmap(100, 100))
+            set_artwork_pixmap(self.cover, QImage())
             return
         image = self.artwork.get(self.album.artwork_url)
         if not image.isNull():
-            self.cover.setPixmap(
-                QPixmap.fromImage(image).scaled(
-                    100, 100, Qt.KeepAspectRatio, Qt.SmoothTransformation
-                )
-            )
+            set_artwork_pixmap(self.cover, image)
 
 
 class Shelf(QWidget):

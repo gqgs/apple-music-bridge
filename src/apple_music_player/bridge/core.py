@@ -22,6 +22,7 @@ from ..model import Album, Artist, PlayerError, Track
 from ..runtime import ManagedRuntime
 from ..runtime_install import RuntimeStore
 from .metrics import Metrics
+from .release_types import release_types
 
 
 class BridgeError(Exception):
@@ -238,7 +239,11 @@ class Core:
         if item.artist_id:
             result["artistId"] = f"am:{item.country}:{self.quality}:artist:{item.artist_id}"
         if isinstance(item, Album):
-            result.update(songCount=self.child_counts()[1][item.id], duration=0)
+            result.update(
+                songCount=self.child_counts()[1][item.id],
+                duration=0,
+                releaseTypes=release_types(item.album_title),
+            )
         else:
             result.update(
                 title=result.pop("name"),

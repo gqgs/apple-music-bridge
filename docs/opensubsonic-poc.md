@@ -351,3 +351,40 @@ queue/operation time and download outcomes. Fetch failures distinguish network,
 server, denied, TLS, invalid content and other HTTP failures without response bodies.
 The metrics describe completed operations (plus explicit timeout/busy events), not
 percentiles or a promise that every pending operation completes within its deadline.
+
+## Release types contract for native clients
+
+Every serialized album includes OpenSubsonic `releaseTypes`: `getAlbum`, albums
+embedded in `getArtist`, `search3` album results, and `getAlbumList2`. Song/artist
+objects do not acquire an album-only field. The mapping uses the existing frozen,
+direct-weight classifier; it is approximate, not Apple's editorial classification.
+No classifier weights, catalog IDs, titles, sorting or playback behavior change.
+
+| Classifier category | Wire values |
+| --- | --- |
+| Albums | `["Album"]` |
+| Singles & EPs | `["EP"]`, `["Single"]`, or both, using the classifier's existing EP/single token features |
+| Live Albums | `["Live"]` |
+| Compilations | `["Compilation"]` |
+| Others, with a nonempty title | `["Other"]` |
+| Missing/blank title, unsupported category, or no subtype evidence | `[]` |
+
+Values use the spelling above; clients should normalize case. `Other` is an
+explicit category, distinct from unknown/absent metadata. Clients must not turn
+an empty array or unrecognized future string into explicit Other. In XML, each
+value is a repeated `<releaseTypes>` text element; an empty list has no elements.
+The title can contain both EP and Single evidence; both values still belong to
+the client's combined Singles & EPs section. Live/Compilation are emitted alone,
+without inventing a studio-album primary type or an additional subtype.
+
+This is the integration contract for the Supersonic fork: map explicit `Other`
+to its Other flag/group, preserve an unknown state for absent/unrecognized types,
+and group EP/Single together. The inspected upstream normalizer currently falls
+back to Album when no recognized flags exist, including explicit Other; that client
+behavior needs the separate fork patch. No Supersonic repository code is changed
+by this bridge update. The mapper is independent of Qt and covered by JSON/XML
+HTTP regressions across all four album response locations.
+
+Protocol source: [OpenSubsonic AlbumID3 releaseTypes](https://opensubsonic.netlify.app/docs/responses/albumid3/),
+an optional array of strings rather than a closed enum. This metadata does not
+claim complete or authoritative release categorization.

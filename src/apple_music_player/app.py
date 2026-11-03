@@ -6,8 +6,8 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-from PySide6.QtCore import QSize, Qt, QTimer
-from PySide6.QtGui import QIcon, QPixmap
+from PySide6.QtCore import QSize, Qt, QTimer, QUrl
+from PySide6.QtGui import QDesktopServices, QIcon, QPixmap
 from PySide6.QtWidgets import (
     QApplication,
     QComboBox,
@@ -29,8 +29,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from .artwork import BADGE_URL, Artwork
-from .browsing import AlbumCard, Shelf, placeholder
+from .artwork import BADGE_URL, Artwork, allowed_url
+from .browsing import AlbumCard, Shelf, placeholder, store_link
 from .cache import Cache
 from .catalog import Catalog, CatalogDeferred, recent_releases
 from .controller import Controller
@@ -251,6 +251,24 @@ class Window(QMainWindow):
         queue_buttons.addWidget(self.usage)
         layout.addLayout(queue_buttons)
         layout = root_layout
+        # One badge for the whole visible layout, outside scrolling content and directly
+        # between catalog artwork and now playing. Cards retain their own destination links.
+        self.badge_album = None
+        self.badge_strip = QWidget()
+        badge_row = QHBoxLayout(self.badge_strip)
+        badge_row.setContentsMargins(8, 4, 8, 4)
+        self.badge_caption = QLabel()
+        self.badge_caption.setTextFormat(Qt.PlainText)
+        self.badge_caption.setWordWrap(True)
+        badge_row.addWidget(self.badge_caption, 1)
+        self.store_badge = QPushButton()
+        self.store_badge.setObjectName("itunesStoreBadge")
+        self.store_badge.setIconSize(QSize(120, 40))
+        self.store_badge.setFixedSize(140, 48)
+        self.store_badge.clicked.connect(self.open_badge_album)
+        badge_row.addWidget(self.store_badge)
+        layout.addWidget(self.badge_strip)
+        self.badge_strip.hide()
         footer = QHBoxLayout()
         self.now_host = QVBoxLayout()
         footer.addLayout(self.now_host)
@@ -318,21 +336,44 @@ class Window(QMainWindow):
                 self.detail_card = AlbumCard(album, self.artwork, self.open_album)
                 self.detail_host.addWidget(self.detail_card)
 
+    def open_badge_album(self):
+        if self.badge_album:
+            QDesktopServices.openUrl(QUrl(store_link(self.badge_album)))
+
     def refresh_artwork(self):
+        candidates = []
+        if self.pages.currentIndex() == 0:
+            candidates = [card.album for card in self.recent_shelf.cards + self.release_shelf.cards]
+        elif self.pages.currentIndex() == 1:
+            if self.detail_card:
+                candidates.append(self.detail_card.album)
+            candidates.extend(
+                item if isinstance(item, Album) else item.album for item in self.results
+            )
+        if self.now_card:
+            candidates.append(self.now_card.album)
+        self.badge_album = next((a for a in candidates if a and allowed_url(a.artwork_url)), None)
+        badge = self.artwork.get(BADGE_URL) if self.badge_album else None
+        badge_ready = badge is not None and not badge.isNull()
+        self.badge_strip.setVisible(badge_ready)
+        if badge_ready:
+            self.store_badge.setIcon(QIcon(QPixmap.fromImage(badge)))
+            self.store_badge.setAccessibleName("View " + self.badge_album.title + " in iTunes")
+            self.badge_caption.setText("Album artwork · Store link: " + self.badge_album.title)
         if self.pages.currentIndex() == 0:
             self.recent_shelf.refresh()
             self.release_shelf.refresh()
         elif self.pages.currentIndex() == 1:
             if self.detail_card:
                 self.detail_card.refresh()
-            if (
-                any(item.artwork_url for item in self.results)
-                and not self.artwork.get(BADGE_URL).isNull()
-            ):
+            if badge_ready:
                 for index, item in enumerate(self.results):
                     image = self.artwork.get(item.artwork_url)
                     if not image.isNull() and index < self.result_list.count():
                         self.result_list.item(index).setIcon(QIcon(QPixmap.fromImage(image)))
+            else:
+                for index in range(self.result_list.count()):
+                    self.result_list.item(index).setIcon(placeholder())
         if self.now_card:
             self.now_card.refresh()
 

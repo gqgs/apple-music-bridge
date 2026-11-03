@@ -417,3 +417,75 @@ def test_populated_home_fits_short_viewport_with_scroll_and_visible_transport(
     bar.setValue(bar.maximum())
     assert bar.value() > 0
     window.close()
+
+
+def test_one_shared_badge_for_home_search_and_now_playing(app, tmp_path, monkeypatch):
+    from PySide6.QtCore import QPoint
+    from PySide6.QtWidgets import QPushButton
+
+    from apple_music_player.browsing import AlbumCard, store_link
+
+    window = Window(tmp_path / "cache")
+    window.startup_attempted = True
+    window.timer.stop()
+    monkeypatch.setattr(window, "refresh_releases", lambda: None)
+    monkeypatch.setattr(window.controller, "tick", lambda: None)
+    present = [True]
+    image = decode(png())  # Synthetic image only; no official badge retrieval.
+    monkeypatch.setattr(window.artwork, "get", lambda url: image if present[0] else QImage())
+    opened = []
+    monkeypatch.setattr(
+        "apple_music_player.app.QDesktopServices.openUrl", lambda url: opened.append(url.toString())
+    )
+    window.show()
+    app.processEvents()
+    album = TRACK.album
+    window.recent_shelf.set_albums([album], "")
+    window.release_shelf.set_albums([album], "")
+    window.now_card = AlbumCard(album, window.artwork, window.open_album, compact=True)
+    window.now_host.addWidget(window.now_card)
+    window.resize(1024, 480)
+
+    def verify():
+        window.refresh_artwork()
+        app.processEvents()
+        badges = window.findChildren(QPushButton, "itunesStoreBadge")
+        assert len(badges) == 1 and badges[0].isVisible()
+        assert window.height() == 480
+        strip_top = window.badge_strip.mapTo(window, QPoint()).y()
+        strip_bottom = window.badge_strip.mapTo(window, window.badge_strip.rect().bottomLeft()).y()
+        pages_bottom = window.pages.mapTo(window, window.pages.rect().bottomLeft()).y()
+        assert 0 <= strip_top - pages_bottom <= 16
+        assert strip_bottom < window.now_card.mapTo(window, QPoint()).y()
+        assert window.pause_button.mapTo(window, window.pause_button.rect().bottomLeft()).y() < 480
+        assert window.now_card.store.icon().isNull()
+        assert window.now_card.store.text() == "View album in iTunes"
+        window.store_badge.click()
+        assert opened[-1] == store_link(window.badge_album)
+
+    try:
+        verify()
+        assert window.home_scroll.verticalScrollBar().maximum() > 0
+        for card in window.recent_shelf.cards + window.release_shelf.cards:
+            assert card.store.icon().isNull() and card.store.text() == "View album in iTunes"
+        window.pages.setCurrentIndex(1)
+        window.results = [album]
+        window.result_list.addItem(album.title)
+        window.result_list.setCurrentRow(0)
+        verify()
+        assert window.detail_card.store.icon().isNull()
+        window.results = [TRACK]
+        window.result_list.clear()
+        window.result_list.addItem(TRACK.title)
+        window.result_list.setCurrentRow(0)
+        verify()  # Album track detail + now playing share the same badge.
+        window.pages.setCurrentIndex(2)
+        verify()  # Now-playing artwork alone still has one adjacent badge.
+        present[0] = False
+        window.refresh_artwork()
+        assert window.badge_strip.isHidden()
+        assert window.now_card.cover.icon().pixmap(48, 48).toImage().pixelColor(0, 0) == QColor(
+            "#264653"
+        )
+    finally:
+        window.close()

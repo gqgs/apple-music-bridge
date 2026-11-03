@@ -77,15 +77,13 @@ class AlbumCard(QFrame):
         self.revision = -1
 
     def refresh(self):
-        # Show fetched artwork only alongside the unmodified approved badge.
+        # The window supplies one shared official badge beside the visible artwork view.
         if not allowed_url(self.album.artwork_url):
             return
         badge = self.artwork.get(BADGE_URL)
         if badge.isNull():
+            self.cover.setIcon(placeholder())
             return
-        self.store.setText("")
-        self.store.setIcon(QIcon(QPixmap.fromImage(badge)))
-        self.store.setIconSize(QSize(120, 40))
         image = self.artwork.get(self.album.artwork_url)
         if not image.isNull():
             self.cover.setIcon(QIcon(QPixmap.fromImage(image)))

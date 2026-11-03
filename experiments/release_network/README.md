@@ -4,8 +4,10 @@
 The original rule-encoding control below is retained for reproducibility. The
 follow-up freezes a different 101-parameter network before collecting labels.
 
-This is an isolated **rule-encoding experiment**, not a learned classifier and not
-a proposed production replacement. The player never imports it. No network calls,
+This original control is a **rule-encoding experiment**, not a learned classifier.
+The player never imports this control. The later independent candidate now has an
+opt-in UI on this experimental branch: see [live UI testing](UI_TESTING.md).
+The offline control below involves no network calls,
 accounts, downloaded media, training dataset, optimizer, gradients, embeddings or
 new dependencies are involved.
 

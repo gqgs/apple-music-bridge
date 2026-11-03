@@ -2,7 +2,9 @@
 
 The user requested a classifier designed from scratch rather than a neural copy
 of our existing rules. `candidate.py` implements that second experiment. It is
-still isolated: no player source, production behavior or dependencies changed.
+unchanged since evaluation. A subsequent opt-in [UI integration](UI_TESTING.md)
+is available on the experimental branch; main remains unchanged. The measurements
+below describe the frozen classifier, not end-to-end UI performance.
 
 ## Reproduce
 

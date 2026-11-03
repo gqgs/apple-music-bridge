@@ -1,5 +1,12 @@
 # Apple Music Player
 
+**Experimental branch:** Search now has a **Release grouping (experiment)** selector.
+Choose **Experimental neural network**, search/open an artist, and hover a release
+to compare both predictions. Switch to **Current heuristic** to regroup immediately
+without another request. The choice resets to the heuristic on app restart.
+This affects artist-page grouping only; it does not improve catalog coverage.
+See [checkout instructions, results and limitations](experiments/release_network/UI_TESTING.md).
+
 <img src="src/apple_music_player/assets/logo.svg" width="64" height="64" alt="Player logo: white play triangle with mint spatial sound arcs on navy" />
 
 A small native Linux player: search songs, browse albums, queue lossless/Dolby downloads, and play through mpv. Python 3.11+, Qt Widgets, SQLite. No embedded browser.

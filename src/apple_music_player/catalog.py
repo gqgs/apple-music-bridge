@@ -329,7 +329,7 @@ def release_group(album):
     return "Albums" if title else "Others"
 
 
-def grouped_releases(albums):
+def grouped_releases(albums, classifier=release_group):
     def order(album):
         try:
             released = date.fromisoformat(album.release_date[:10]).toordinal()
@@ -337,8 +337,9 @@ def grouped_releases(albums):
             released = 0
         return (-released, album.album_title.casefold(), album.country, album.id)
 
-    return [
-        (group, sorted((a for a in albums if release_group(a) == group), key=order))
-        for group in ("Albums", "Singles & EPs", "Live Albums", "Compilations", "Others")
-        if any(release_group(a) == group for a in albums)
-    ]
+    groups = {
+        name: [] for name in ("Albums", "Singles & EPs", "Live Albums", "Compilations", "Others")
+    }
+    for album in albums:
+        groups[classifier(album)].append(album)
+    return [(group, sorted(values, key=order)) for group, values in groups.items() if values]

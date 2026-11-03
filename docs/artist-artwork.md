@@ -128,3 +128,20 @@ both views. Regression tests cover a collaborator-only EP via artist detail and
 background lookup, restart persistence, and rejection for a different artist ID.
 User sample text suggests this may explain some featured-artist/soundtrack cases,
 but their actual public lookup payloads were not available for live confirmation.
+
+### Headless Qt ownership
+
+The bridge initializes a QCoreApplication on the process main thread before its
+workers and retains it through process shutdown. It does not create a window,
+require a display server, or suppress Qt warnings. QBuffer/QImageReader instances
+remain local to each decoding call. Qt documents QImageReader as reentrant and
+recommends a QCoreApplication for non-GUI Qt programs:
+https://doc.qt.io/qt-6/qimagereader.html
+https://doc.qt.io/qt-6/qcoreapplication.html
+
+A fresh-process test reproduces moveToThread warnings when successive short-lived
+worker pools decode PNG/JPEG/WebP without an application object. The same workload
+through bridge initialization emits no warnings, including with an existing core
+application and with no usable GUI platform. Decoding succeeded in the original
+reproduction; the warnings demonstrate invalid thread affinity, not proven media
+corruption or a cause of catalog rate limits.

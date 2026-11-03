@@ -7,12 +7,17 @@ import signal
 import threading
 from pathlib import Path
 
+from PySide6.QtCore import QCoreApplication
+
 from ..model import PlayerError
 from .core import Actor
 from .http import ProtocolCore, Server, auth_file
 
+_qt_application = None  # Keep Qt main-thread/plugin ownership alive until process exit.
+
 
 def main():
+    global _qt_application
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--auth-file", type=Path, required=True)
     parser.add_argument(
@@ -55,6 +60,7 @@ def main():
         if not 1 <= args.port <= 65535 or not 1 <= args.cache_gib <= 1024:
             raise ValueError()
         credentials = auth_file(args.auth_file)
+        _qt_application = QCoreApplication.instance() or QCoreApplication(["apple-music-bridge"])
         actor = Actor(
             lambda cancel: ProtocolCore(
                 args.cache,

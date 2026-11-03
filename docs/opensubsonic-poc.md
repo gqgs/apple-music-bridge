@@ -388,3 +388,30 @@ HTTP regressions across all four album response locations.
 Protocol source: [OpenSubsonic AlbumID3 releaseTypes](https://opensubsonic.netlify.app/docs/responses/albumid3/),
 an optional array of strings rather than a closed enum. This metadata does not
 claim complete or authoritative release categorization.
+
+## Metadata scheduling follow-up (#8)
+
+Catalog cooldown and HTTP 429 deferrals now wait outside the sole catalog/cache
+worker. A warm artist lookup can finish while a cold search waits for its next
+public request. Each logical RPC keeps one of four admission slots and its original
+20-second deadline across retries. Completed catalog responses are reused on retry;
+expired queued work is drained before releasing admission. Shutdown interrupts waits.
+The same shared three-second spacing and upstream Retry-After remain enforced.
+
+Diagnostics now distinguish `metadata_queue` (each executor admission),
+`metadata_work` (each dispatch attempt, including blocking upstream I/O), and
+`catalog_wait` (deferred time outside the worker). `catalog_wait:rate_limited`
+identifies an explicit 429 deferral; `deferred` may include either local spacing or
+an already-established upstream cooldown. `metadata` measures the complete logical
+RPC, including queue and deferred time, rather than only its dispatch execution.
+Counts across these stages need not match. All remain aggregate and secret-free.
+
+A synthetic regression with the real Catalog limiter/cache performs four requests
+at least three seconds apart. A cached artist request completes within one second
+while the cold three-entity search waits. On the previous implementation that warm
+request times out in the regression. This fixes head-of-line blocking during waits,
+not all search latency: a cold search still needs multiple spaced public requests,
+and a blocking upstream network call (15-second socket timeout) can still occupy the
+worker. Supersonic's additional artist/album lookups add demand. Live client retesting
+is required; cumulative maxima cannot attribute a timeout to a specific query, and
+the reported successful cover fetches do not establish artwork as the cause.

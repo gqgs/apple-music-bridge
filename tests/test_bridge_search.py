@@ -228,3 +228,130 @@ def test_slow_download_does_not_hold_catalog_worker(bridge, monkeypatch):
             release.set()
         assert stream.result()[0] == 200
     assert any(m["stage"] == "download" and m["outcome"] == "ok" for m in server.metrics.snapshot())
+
+
+def test_catalog_cooldown_releases_worker_for_warm_artist(tmp_path, monkeypatch):
+    """Real Catalog spacing/cache, synthetic HTTP: cold search must not block warm browse."""
+    import time
+
+    starts = []
+    entered = threading.Event()
+
+    def opened(url, timeout):
+        params = parse_qs(urlsplit(url).query)
+        starts.append((params.get("entity", [""])[0], time.monotonic()))
+        return io.BytesIO(b'{"results": []}')
+
+    monkeypatch.setattr("apple_music_player.catalog.urlopen", opened)
+    actor = Actor(lambda cancel: ProtocolCore(tmp_path / "cache", 1024, cancel=cancel))
+    try:
+        actor.call("remember", [ARTIST])
+        actor.metadata("getArtist", {"id": "am:br:lossless:artist:1"})
+        original = actor.core.catalog.search
+
+        def search(*args, **kwargs):
+            entered.set()
+            return original(*args, **kwargs)
+
+        monkeypatch.setattr(actor.core.catalog, "search", search)
+        with ThreadPoolExecutor(2) as pool:
+            cold = pool.submit(actor.metadata, "search3", {"query": "bjork"})
+            assert entered.wait(1)
+            warm = pool.submit(actor.metadata, "getArtist", {"id": "am:br:lossless:artist:1"})
+            assert warm.result(timeout=1)["artist"]["id"] == "am:br:lossless:artist:1"
+            assert not cold.done()
+            assert cold.result(timeout=12)["searchResult3"] == {
+                "artist": [],
+                "album": [],
+                "song": [],
+            }
+        assert [entity for entity, _ in starts] == ["album", "musicArtist", "album", "song"]
+        assert all(b[1] - a[1] >= 2.99 for a, b in zip(starts, starts[1:], strict=False))
+        metrics = actor.metrics.snapshot()
+        assert any(m["stage"] == "catalog_wait" and m["count"] == 3 for m in metrics)
+        assert max(m["maxMs"] for m in metrics if m["stage"] == "metadata_queue") < 1000
+    finally:
+        actor.close()
+
+
+@pytest.mark.parametrize("stop", [False, True])
+def test_deferred_metadata_retry_or_shutdown(tmp_path, stop):
+    from apple_music_player.catalog import CatalogDeferred
+
+    entered = threading.Event()
+    attempts = []
+
+    class DeferredCatalog(FakeCatalog):
+        def search(self, *args, **kwargs):
+            attempts.append(1)
+            if len(attempts) == 1:
+                entered.set()
+                raise CatalogDeferred(1 if stop else 0.02, rate_limited=True)
+            return super().search(*args, **kwargs)
+
+    actor = Actor(
+        lambda cancel: ProtocolCore(
+            tmp_path / "cache", 1024, catalog=DeferredCatalog(), cancel=cancel
+        )
+    )
+    try:
+        with ThreadPoolExecutor(1) as pool:
+            result = pool.submit(actor.metadata, "search3", {"query": "bjork"})
+            assert entered.wait(1)
+            if stop:
+                actor.close()
+                with pytest.raises(BridgeError, match="stopping"):
+                    result.result(timeout=1)
+                assert len(attempts) == 1
+            else:
+                assert result.result(timeout=1)["searchResult3"]["artist"]
+        # All admission slots are returned, including cancellation while waiting.
+        for _ in range(4):
+            assert actor.metadata_pending.acquire(False)
+        for _ in range(4):
+            actor.metadata_pending.release()
+    finally:
+        if not stop:
+            actor.close()
+
+
+def test_parallel_deferrals_keep_deadlines_and_admission_bounded(tmp_path):
+    import time
+
+    from apple_music_player.catalog import CatalogDeferred
+
+    calls = []
+    entered = threading.Event()
+
+    class LimitedCatalog(FakeCatalog):
+        def search(self, *args, **kwargs):
+            calls.append(time.monotonic())
+            entered.set()
+            raise CatalogDeferred(0.08, rate_limited=True)
+
+    actor = Actor(
+        lambda cancel: ProtocolCore(
+            tmp_path / "cache", 1024, catalog=LimitedCatalog(), cancel=cancel
+        )
+    )
+    try:
+        started = time.monotonic()
+        with ThreadPoolExecutor(4) as pool:
+            jobs = [
+                pool.submit(actor.metadata, "search3", {"query": "bjork"}, 0.3) for _ in range(4)
+            ]
+            assert entered.wait(1)
+            # Wait for all four logical RPCs to be admitted, without upstream sleeps
+            # consuming the worker. Cache-only operations can still run between them.
+            for job in jobs:
+                with pytest.raises(BridgeError):
+                    job.result(timeout=1)
+        assert time.monotonic() - started < 1
+        assert 4 <= len(calls) <= 16
+        for _ in range(4):
+            assert actor.metadata_pending.acquire(False)
+        for _ in range(4):
+            actor.metadata_pending.release()
+        assert actor.core.operation_deadline is None
+    finally:
+        actor.close()

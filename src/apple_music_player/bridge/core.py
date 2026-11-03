@@ -164,6 +164,9 @@ class Core:
                     and time.monotonic() + exc.seconds >= self.operation_deadline
                 ):
                     raise BridgeError(0, "Catalog request expired; retry when ready") from None
+                if self.operation_deadline is not None:
+                    # HTTP callers defer outside the sole catalog/cache worker.
+                    raise
                 self.cancel.wait(exc.seconds)
                 budget -= exc.seconds
         raise AssertionError("unreachable")
@@ -425,36 +428,71 @@ class Actor:
             raise BridgeError(0, "Catalog busy; retry later")
         queued = time.monotonic()
         deadline = queued + timeout
+        future = None
 
-        def invoke():
+        def invoke(submitted):
             started = time.monotonic()
-            self.metrics.record("metadata_queue", "ok", started - queued)
+            self.metrics.record("metadata_queue", "ok", started - submitted)
             self.core.operation_deadline = deadline
+            outcome = "ok"
             try:
                 self.core.check_deadline()
-                result = self.core.dispatch(method, params)
-                self.metrics.record("metadata", "ok", time.monotonic() - started)
-                return result
+                if self.cancel.is_set():
+                    raise BridgeError(0, "Bridge stopping")
+                return self.core.dispatch(method, params)
+            except CatalogDeferred:
+                outcome = "deferred"
+                raise
             except Exception:
-                self.metrics.record("metadata", "failed", time.monotonic() - started)
+                outcome = "failed"
                 raise
             finally:
+                self.metrics.record("metadata_work", outcome, time.monotonic() - started)
                 self.core.operation_deadline = None
-                self.metadata_pending.release()
 
         try:
-            future = self.pool.submit(invoke)
-        except Exception:
-            self.metadata_pending.release()
-            raise
-        try:
-            return future.result(timeout=timeout)
+            # Replay dispatch after deferral: completed catalog responses are cached.
+            # Admission spans all attempts; neither queued time nor Retry-After resets
+            # the original deadline. Bound wakeups even for an invalid zero delay.
+            for _ in range(32):
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise TimeoutError
+                if self.cancel.is_set():
+                    raise BridgeError(0, "Bridge stopping")
+                future = self.pool.submit(invoke, time.monotonic())
+                try:
+                    result = future.result(timeout=remaining)
+                except CatalogDeferred as exc:
+                    delay = max(0.01, exc.seconds)
+                    if not 0 <= exc.seconds <= 30 or time.monotonic() + delay >= deadline:
+                        raise BridgeError(0, "Catalog rate limit; retry later") from None
+                    started = time.monotonic()
+                    stopped = self.cancel.wait(delay)
+                    self.metrics.record(
+                        "catalog_wait",
+                        "rate_limited" if exc.rate_limited else "deferred",
+                        time.monotonic() - started,
+                    )
+                    if stopped:
+                        raise BridgeError(0, "Bridge stopping") from None
+                    continue
+                self.metrics.record("metadata", "ok", time.monotonic() - queued)
+                return result
+            raise BridgeError(0, "Catalog rate limit; retry later")
         except TimeoutError:
             self.metrics.record("metadata", "timeout", time.monotonic() - queued)
-            # Keep the admission slot until the executor drains this task. Cancelling
-            # a Future alone leaves its work item queued, allowing unbounded buildup.
-            # Expired queued tasks skip dispatch when they reach the worker.
             raise BridgeError(0, "Catalog busy or timed out; retry later") from None
+        except Exception:
+            self.metrics.record("metadata", "failed", time.monotonic() - queued)
+            raise
+        finally:
+            # Timed-out work retains admission until drained. Cancelling a Future
+            # leaves its executor work item queued and could permit unbounded buildup.
+            if future is None:
+                self.metadata_pending.release()
+            else:
+                future.add_done_callback(lambda _: self.metadata_pending.release())
 
     def close(self):
         self.cancel.set()

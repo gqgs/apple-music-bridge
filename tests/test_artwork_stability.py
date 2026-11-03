@@ -171,6 +171,10 @@ def test_large_search_has_stable_geometry_and_bounded_artwork(
         assert window.result_list.currentRow() == 150
         assert window.badge_strip.isVisible() == (success and mode == "album")
     finally:
+        # Detach Python event filters while their widgets are still alive.
+        # Qt may otherwise invoke them during delayed/GC-driven widget teardown.
+        for widget in (window.centralWidget(), window.badge_strip, window.result_list.viewport()):
+            widget.removeEventFilter(events)
         window.close()
 
 

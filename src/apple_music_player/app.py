@@ -56,6 +56,7 @@ from .model import Album, Artist, PlayerError, Track
 from .playback import Mpv
 
 GIB = 1024**3
+SEARCH_IDLE = "Search for an artist, album or song"
 
 
 def application_icon():
@@ -235,7 +236,7 @@ class Window(QMainWindow):
         self.use_backend_country.clicked.connect(self.adopt_backend_storefront)
         storefront_row.addWidget(self.use_backend_country)
         layout.addLayout(storefront_row)
-        self.catalog_status = QLabel("Search for artists, albums or songs.")
+        self.catalog_status = QLabel(SEARCH_IDLE)
         self.catalog_status.setTextFormat(Qt.PlainText)
         self.catalog_status.setWordWrap(True)
         diagnostics_row = QHBoxLayout()
@@ -602,6 +603,8 @@ class Window(QMainWindow):
             self.catalog_status.setText(
                 "Search text changed · previous results remain displayed. Press Search to update."
             )
+        else:
+            self.catalog_status.setText(SEARCH_IDLE)
 
     def copy_search_diagnostics(self):
         if not self.last_search_diagnostics and not self.last_artist_diagnostics:
@@ -628,6 +631,7 @@ class Window(QMainWindow):
         QApplication.clipboard().setText(json.dumps(report, ensure_ascii=False, indent=2))
 
     def invalidate_search(self, *_, clear=False):
+        was_pending = bool(self.catalog_future or self.catalog_timer.isActive())
         self.album_tracks = ()
         self.play_album_button.setEnabled(False)
         self.generation += 1
@@ -636,6 +640,10 @@ class Window(QMainWindow):
         if self.catalog_future:
             self.catalog_future[1].cancel()
             self.catalog_future = None
+        if clear or not self.results:
+            self.catalog_status.setText(SEARCH_IDLE)
+        elif was_pending and self.pending_result_kind != "releases":
+            self.catalog_status.setText("Previous results · press Search to update")
         if clear:
             self.results = []
             self.result_indices.clear()
@@ -657,12 +665,18 @@ class Window(QMainWindow):
         self.catalog_retries = 0
         self.resume_catalog()
 
+    def set_request_status(self, text):
+        label = (
+            self.release_status if self.pending_result_kind == "releases" else self.catalog_status
+        )
+        label.setText(text)
+
     def resume_catalog(self):
         if self.closing or self.catalog_request is None:
             return
         operation, args = self.catalog_request
         self.catalog_future = (self.generation, self.catalog_pool.submit(operation, *args))
-        self.catalog_status.setText("Loading catalog…")
+        self.set_request_status("Loading catalog…")
 
     def search_catalog(self):
         self.pages.setCurrentIndex(1)
@@ -985,18 +999,18 @@ class Window(QMainWindow):
                         self.catalog_retries += 1
                     if self.catalog_retries > 2 or exc.seconds > 60:
                         self.catalog_request = None
-                        self.catalog_status.setText(
+                        self.set_request_status(
                             "Catalog rate limit persists. Try again later; results are kept."
                         )
                     else:
-                        self.catalog_status.setText(
+                        self.set_request_status(
                             "Catalog rate limited · retrying automatically…"
                             if exc.rate_limited
                             else "Waiting for catalog request spacing…"
                         )
                         self.catalog_timer.start(max(1, int(exc.seconds * 1000) + 1))
                 except PlayerError as exc:
-                    self.catalog_status.setText(str(exc))
+                    self.set_request_status(str(exc))
                     if self.pending_result_kind == "releases":
                         self.release_status.setText("Recent releases unavailable; try again later.")
                         self.release_context = None
@@ -1004,11 +1018,10 @@ class Window(QMainWindow):
                     if self.pending_result_kind == "releases":
                         self.release_context = None
                         self.release_status.setText("Recent releases unavailable; try again later.")
-                    self.catalog_status.setText(
+                    self.set_request_status(
                         "Catalog unavailable. Check network/storefront and search again."
                     )
         if self.pending_result_kind == "releases" and self.release_context:
-            self.release_status.setText(self.catalog_status.text())
             if self.catalog_request is None:
                 self.release_context = None
         try:

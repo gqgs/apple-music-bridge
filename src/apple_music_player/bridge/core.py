@@ -8,6 +8,7 @@ import stat
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict
+from datetime import date
 
 from ..cache import Cache
 from ..catalog import Catalog, CatalogDeferred, grouped_releases
@@ -163,6 +164,20 @@ class Core:
             name=item.album_title if isinstance(item, Album) else item.track_name or item.title,
             artist=item.artist,
         )
+        # Catalog releaseDate may describe a reissue, not the original release.
+        # Missing/invalid dates remain unknown rather than becoming a fake year.
+        try:
+            released = date.fromisoformat(item.release_date[:10])
+        except ValueError:
+            pass
+        else:
+            result["year"] = released.year
+            if isinstance(item, Album):
+                result["releaseDate"] = {
+                    "year": released.year,
+                    "month": released.month,
+                    "day": released.day,
+                }
         if item.artist_id:
             result["artistId"] = f"am:{item.country}:{self.quality}:artist:{item.artist_id}"
         if isinstance(item, Album):

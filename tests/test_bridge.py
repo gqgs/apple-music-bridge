@@ -5,6 +5,7 @@ import threading
 import time
 import xml.etree.ElementTree as ET
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import replace
 from urllib.parse import urlencode
 
 import pytest
@@ -16,7 +17,7 @@ from apple_music_player.downloader import Downloader
 from apple_music_player.model import Album, Artist, Media, PlayerError, Track
 
 ARTIST = Artist("br", "1", "Fixture")
-ALBUM = Album("br", "2", "Record", "Fixture", "1", "Record")
+ALBUM = Album("br", "2", "Record", "Fixture", "1", "Record", release_date="2019-05-24T00:00:00Z")
 TRACK = Track("br", "3", "Song", "2", "Fixture", "1", "Record", track_name="Song", duration_ms=1200)
 KEY = "test-bridge-secret-" + "x" * 32
 
@@ -319,3 +320,41 @@ def test_runtime_ownership_is_explicit_and_mocked(tmp_path, monkeypatch):
     assert calls == ["store", "start"]
     core.close()
     assert calls == ["store", "start", "close"]
+
+
+def test_supersonic_library_artist_info_and_album_year(bridge):
+    server, _ = bridge
+    folders = payload(server, "getMusicFolders")["musicFolders"]["musicFolder"]
+    assert type(folders[0]["id"]) is int  # Go MusicFolder.ID, not an opaque media ID.
+    results = payload(server, "search3", {"query": "fixture"})["searchResult3"]
+    for kind in ("artist", "album", "song"):
+        identifier = results[kind][0]["id"]
+        info = payload(server, "getArtistInfo2", {"id": identifier})
+        assert info["status"] == "ok"
+        assert info["artistInfo2"] == {"similarArtist": []}
+    assert payload(server, "getArtistInfo2", auth=False)["error"]["code"] == 40
+    for identifier in ("", "../../etc/passwd", "am:us:lossless:artist:1"):
+        assert payload(server, "getArtistInfo2", {"id": identifier})["error"]["code"] == 70
+    album_id = results["album"][0]["id"]
+    album = payload(server, "getAlbum", {"id": album_id})["album"]
+    assert type(album["year"]) is int and album["year"] == 2019
+    assert album["releaseDate"] == {"year": 2019, "month": 5, "day": 24}
+    assert "originalReleaseDate" not in album
+    assert results["album"][0]["year"] == 2019
+    ns = {"s": "http://subsonic.org/restapi"}
+    folders_xml = ET.fromstring(request(server, "getMusicFolders", {"f": "xml"})[2])
+    assert folders_xml.find("s:musicFolders/s:musicFolder", ns).attrib["id"] == "1"
+    document = ET.fromstring(request(server, "getAlbum", {"id": album_id, "f": "xml"})[2])
+    assert document.find("s:album", ns).attrib["year"] == "2019"
+    info_xml = ET.fromstring(request(server, "getArtistInfo2", {"id": album_id, "f": "xml"})[2])
+    assert info_xml.find("s:artistInfo2", ns) is not None
+
+
+@pytest.mark.parametrize("released", ["", "invalid", "2019-02-30", "0000-01-01"])
+def test_unknown_release_dates_are_not_invented(bridge, released):
+    server, _ = bridge
+    for item in (ALBUM, TRACK):
+        result = server.actor.call("describe", replace(item, release_date=released))
+        assert "year" not in result and "releaseDate" not in result
+    song = server.actor.call("describe", replace(TRACK, release_date="2001-01-02T00:00:00Z"))
+    assert song["year"] == 2001

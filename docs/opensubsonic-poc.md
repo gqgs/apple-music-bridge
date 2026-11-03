@@ -67,7 +67,7 @@ form POST. Standard `c` and `v` parameters are required. Supported methods:
 
 - `ping`, `getLicense`, `getMusicFolders`, `getUser`, `tokenInfo`;
 - `getOpenSubsonicExtensions` (static public discovery only);
-- `search3`, `getArtists`, `getArtist`, `getAlbum`, `getSong`;
+- `search3`, `getArtists`, `getArtist`, `getArtistInfo2`, `getAlbum`, `getSong`;
 - `getAlbumList2` (`alphabeticalByName` and `newest`), empty read-only `getPlaylists`;
 - `getCoverArt` placeholder PNG and `stream` original completed-file bytes.
 
@@ -177,3 +177,28 @@ supports it, and verify the soundbar's Atmos indication. Merely using libmpv or
 receiving E-AC-3 is insufficient. Note unsupported endpoint names without sharing
 credential-bearing URLs/logs. Resolve client protocol gaps and artwork terms before
 considering a merge; this PoC remains a draft for review and testing.
+
+
+## Supersonic compatibility fixes
+
+The bridge returns numeric music-folder IDs (media IDs remain opaque strings).
+`getArtistInfo2` validates the requested catalog item and returns an empty similar
+artist list; biography, external links and portraits are unavailable, not fabricated.
+Album/song `year` and album `releaseDate` come from the validated public catalog
+release date. This is not asserted to be the original release date: reissues may
+have later dates. Missing/invalid dates are omitted; clients may still display zero
+for genuinely unknown years.
+
+Source inspection of [Supersonic f28980f8](https://github.com/supersonic-app/supersonic/tree/f28980f8d79d0c6b43d43b512c99d84a66632e47)
+confirmed its artist-info request and album header year fallback. Its pinned
+[go-subsonic types](https://github.com/supersonic-app/go-subsonic/blob/7a5f505a273c/subsonic/models.go)
+confirm numeric folder IDs and years. Both projects were inspected read-only;
+no GPL implementation code was copied or added as a dependency. JSON/XML contract
+regressions use synthetic catalog data; this is not real-client UI validation.
+The actual client must be retested after restarting the bridge and refreshing its
+server/album data.
+
+Covers remain placeholders. Apple's [Search API usage conditions](https://performance-partners.apple.com/search-api)
+restrict promotional artwork use and require associated store promotion/linking;
+adding a badge alone is not a blanket permission. Enabling covers in an arbitrary
+client requires a separate assessment of its display and applicable conditions.

@@ -117,7 +117,7 @@ class ProtocolCore(Core):
         if method == "getMusicFolders":
             return {
                 "musicFolders": {
-                    "musicFolder": [{"id": "1", "name": "Apple catalog (discovered items)"}]
+                    "musicFolder": [{"id": 1, "name": "Apple catalog (discovered items)"}]
                 }
             }
         if method == "getUser":
@@ -156,6 +156,11 @@ class ProtocolCore(Core):
                     ],
                 }
             }
+        if method == "getArtistInfo2":
+            # The API accepts artist, album or song IDs. Validate existence, but
+            # do not invent biography, portraits or similar-artist suggestions.
+            self.resolve(params.get("id", ""))
+            return {"artistInfo2": {"similarArtist": []}}
         if method == "getArtist":
             artist = self.resolve(params.get("id", ""), "artist")
             albums = self.albums(artist)

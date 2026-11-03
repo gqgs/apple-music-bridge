@@ -77,14 +77,20 @@ Artist pages show Albums, Singles & EPs, Live Albums, Compilations, then Others,
 
 The public iTunes [result documentation](https://developer.apple.com/library/archive/documentation/AudioVideo/Conceptual/iTuneSearchAPI/UnderstandingSearchResults.html) does not define editorial album/EP/live/compilation flags. Its collection type Album is not evidence of a major studio LP. The separate [Apple Music album attributes](https://developer.apple.com/documentation/applemusicapi/albums/attributes-data.dictionary) describe compilation information, but those are not fields we can assume in the public iTunes response. Live public iTunes payload verification remains unavailable in this environment; no denied route was retried.
 
-Our mutually exclusive groups are title heuristics, in this priority:
-- Singles & EPs: final separated EP/Single markers, including parenthesized labels such as UK CD1 Single. Supported Spanish single markers include Sencillo/Sencilla and their plurals.
-- Compilations: explicit Greatest Hits, Compilation, Compilación, Compilações or Coletânea phrases; exact Anthology/Antologia/Antología or Best Of titles; or Best Of followed by the actual artist name.
-- Live Albums: explicit parenthesized/bracketed or dash-separated Live/Ao Vivo/En Vivo markers, or Live at/in/from prefixes. Bare words such as Live Forever, I Live or Cornucopia Live are ambiguous and use the Albums fallback.
-- Albums: explicit final Album/Álbum/Studio Album/LP markers and all otherwise unmarked titled releases, as requested. This is a practical default, not verified studio-album classification.
-- Others: releases without a usable title. Unknown titled releases now appear in Albums; an unmarked single, live recording or compilation can consequently appear there too.
+The default and sole production classifier is a 10 → 6 ReLU → 5 linear network
+with 101 directly programmed parameters. It combines title-word/phrase evidence
+for singles/EPs, live performances, compilations and remixes. Unmarked titles
+favor Albums; missing titles and remix-only evidence can produce Others. It does
+not use artist identities, invented editorial metadata or track-count thresholds.
 
-No track-count thresholds, guessed editorial fields, artist-specific hardcoded catalogs or translated-label guesses beyond the listed markers are used. [Apple's public Björk page](https://music.apple.com/us/artist/bj%C3%B6rk/295015?uo=4) supplies source names for tests (Human Behaviour (UK Remixes) - EP, Big Time Sensuality (UK CD1 Single), Vulnicura (Live), Björk's Greatest Hits, Fossora, Bastards). It also shows overlapping editorial categories. Our fixtures test the stated heuristic, not equality with Apple's taxonomy; Bastards and Fossora use the approximate Albums fallback without title hints.
+These groups remain approximate. Broad cues can misclassify titles such as Live
+Forever or The Best of Me; opaque compilation titles can look like Albums. The
+network was accepted after user testing, not because a benchmark proved greater
+accuracy: it and the old heuristic each matched 27/35 sourced page-section labels.
+No model training or extra dependencies are involved. See the
+[recorded evaluation and limitations](../experiments/release_network/REAL_RESULTS.md).
+The old heuristic survives only in offline experiment comparisons, never in the
+player. There is no experimental selector or comparison tooltip in the UI.
 
 Artists is the initial search mode. Direct song/album URL controls are removed; internal canonical playback URLs and parsing remain. The user accepts artist browsing as the practical workaround for public album-search omissions; no extra diagnostic UI was added.
 

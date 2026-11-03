@@ -5,8 +5,8 @@ The original rule-encoding control below is retained for reproducibility. The
 follow-up freezes a different 101-parameter network before collecting labels.
 
 This original control is a **rule-encoding experiment**, not a learned classifier.
-The player never imports this control. The later independent candidate now has an
-opt-in UI on this experimental branch: see [live UI testing](UI_TESTING.md).
+The player never imports this control. The later independent candidate is now the production default: see
+[integration status](UI_TESTING.md).
 The offline control below involves no network calls,
 accounts, downloaded media, training dataset, optimizer, gradients, embeddings or
 new dependencies are involved.
@@ -80,7 +80,7 @@ catalog memorization or new metadata service is added.
 
 Frozen weights were evaluated against 25 synthetic specification cases, including
 localized suffixes, overlapping hints, missing titles and misleading word fragments.
-The comparison imports the actual production heuristic rather than a substitute.
+The comparison uses the archived pre-network production heuristic in `baseline.py`.
 
 | Measure | Result |
 | --- | --- |

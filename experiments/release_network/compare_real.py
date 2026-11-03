@@ -4,10 +4,10 @@ import hashlib
 import json
 from pathlib import Path
 
-from apple_music_player.catalog import release_group
 from apple_music_player.model import Album
 
 from . import candidate
+from .baseline import release_group
 from .evaluate import CASES
 
 ROOT = Path(__file__).parent

@@ -50,10 +50,8 @@ from .catalog import (
     grouped_releases,
     public_text,
     recent_releases,
-    release_group,
 )
 from .controller import Controller
-from .experimental_classifier import classify as experimental_release_group
 from .library import History
 from .model import Album, Artist, PlayerError, Track
 from .playback import Mpv
@@ -69,7 +67,7 @@ def application_icon():
 class Window(QMainWindow):
     def __init__(self, root=None):
         super().__init__()
-        self.setWindowTitle("Apple Music Player — classifier experiment")
+        self.setWindowTitle("Apple Music Player")
         self.setWindowIcon(application_icon())
         self.resize(980, 740)
         custom_root = root is not None
@@ -237,21 +235,6 @@ class Window(QMainWindow):
         search_row.addWidget(self.country)
         self.button(search_row, "Search", self.search_catalog)
         layout.addLayout(search_row)
-        classifier_row = QHBoxLayout()
-        classifier_row.addWidget(QLabel("Release grouping (experiment)"))
-        self.release_classifier = QComboBox()
-        self.release_classifier.addItem("Current heuristic", "heuristic")
-        self.release_classifier.addItem("Experimental neural network", "network")
-        self.release_classifier.setAccessibleName("Release grouping classifier")
-        self.release_classifier.setToolTip(
-            "Artist-page groups only. Directly programmed weights, no training; "
-            "not proven more accurate. Hover a release to compare both predictions. "
-            "This choice is not saved across app launches."
-        )
-        self.release_classifier.currentIndexChanged.connect(self.change_release_classifier)
-        classifier_row.addWidget(self.release_classifier)
-        classifier_row.addStretch()
-        layout.addLayout(classifier_row)
         storefront_row = QHBoxLayout()
         self.storefront_notice = QLabel()
         self.storefront_notice.setTextFormat(Qt.PlainText)
@@ -397,7 +380,6 @@ class Window(QMainWindow):
                 "query": self.search.text(),
                 "country": self.country.text(),
                 "mode": self.search_kind.currentData(),
-                "classifier": self.release_classifier.currentData(),
                 "result": self.results,
                 "context": self.displayed_catalog_context,
                 "row": self.result_list.currentRow(),
@@ -426,30 +408,15 @@ class Window(QMainWindow):
         saved = self.view_history.pop()
         self.invalidate_search()
         self.release_context = None
-        for widget in (
-            self.search,
-            self.country,
-            self.search_kind,
-            self.pages,
-            self.release_classifier,
-        ):
+        for widget in (self.search, self.country, self.search_kind, self.pages):
             widget.blockSignals(True)
         try:
             self.search.setText(saved["query"])
             self.country.setText(saved["country"])
             self.search_kind.setCurrentIndex(self.search_kind.findData(saved["mode"]))
-            self.release_classifier.setCurrentIndex(
-                self.release_classifier.findData(saved["classifier"])
-            )
             self.pages.setCurrentIndex(saved["page"])
         finally:
-            for widget in (
-                self.search,
-                self.country,
-                self.search_kind,
-                self.pages,
-                self.release_classifier,
-            ):
+            for widget in (self.search, self.country, self.search_kind, self.pages):
                 widget.blockSignals(False)
         self.remember_storefront()
         (self.pending_result_kind, self.pending_album_title, self.pending_artist_name) = saved[
@@ -973,26 +940,6 @@ class Window(QMainWindow):
                     "Could not apply cache limit/settings. Check free space and queued tracks."
                 )
 
-    def change_release_classifier(self):
-        # Do not render old results using an in-flight request's new context.
-        if self.catalog_future or self.catalog_timer.isActive():
-            return
-        if self.displayed_catalog_context[0] != "artist_albums":
-            return
-        index = self.result_index(self.result_list.currentRow())
-        selected = self.results[index] if 0 <= index < len(self.results) else None
-        scroll = self.result_list.verticalScrollBar().value()
-        (self.pending_result_kind, self.pending_album_title, self.pending_artist_name) = (
-            self.displayed_catalog_context
-        )
-        self.render_catalog(self.results)
-        if selected is not None:
-            for row, result_index in self.result_indices.items():
-                if result_index >= 0 and self.results[result_index] == selected:
-                    self.result_list.setCurrentRow(row)
-                    break
-        self.result_list.verticalScrollBar().setValue(scroll)
-
     def render_catalog(self, result):
         self.detail_navigation_pending = False
         self.displayed_catalog_context = (
@@ -1031,14 +978,7 @@ class Window(QMainWindow):
                 item.setData(Qt.AccessibleDescriptionRole, "Duration " + track.duration_label)
                 item.setSizeHint(QSize(0, 30))
         elif self.pending_result_kind == "artist_albums":
-            predictions = {
-                album: (release_group(album), experimental_release_group(album.album_title))
-                for album in self.results
-            }
-            network = self.release_classifier.currentData() == "network"
-            for group, albums_in_group in grouped_releases(
-                self.results, lambda album: predictions[album][int(network)]
-            ):
+            for group, albums_in_group in grouped_releases(self.results):
                 heading = QListWidgetItem(group)
                 heading.setFlags(Qt.ItemIsEnabled)
                 self.result_indices[self.result_list.count()] = -1
@@ -1053,11 +993,6 @@ class Window(QMainWindow):
                         album.release_title + (" — " + album.artist if album.artist else "")
                     )
                     self.result_indices[self.result_list.count()] = self.results.index(album)
-                    heuristic, neural = predictions[album]
-                    item.setToolTip(
-                        f"Heuristic: {heuristic}\nExperimental network: {neural}\n"
-                        "Approximate predictions, not Apple editorial labels."
-                    )
                     set_artwork_icon(item, QImage())
                     self.result_list.addItem(item)
         else:
@@ -1100,14 +1035,11 @@ class Window(QMainWindow):
             + (f"double-click to {action}" if self.results else "try another query or storefront")
         )
         if self.pending_result_kind == "artist_albums":
-            differences = sum(a != b for a, b in predictions.values())
             self.catalog_status.setText(
                 self.pending_artist_name
                 + " · "
                 + self.catalog_status.text()
-                + f" · {self.release_classifier.currentText()} · Approximate groups"
-                + ("; unmarked releases are in Albums" if not network else "")
-                + f" · {differences} classifier disagreements (hover to compare)"
+                + " · Approximate neural groups; unmarked releases are in Albums"
             )
         if isinstance(result, SearchResults):
             self.catalog_status.setText(

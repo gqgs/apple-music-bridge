@@ -7,10 +7,11 @@ import re
 import sys
 import time
 
-from apple_music_player.catalog import Catalog, CatalogDeferred, public_text, release_group
+from apple_music_player.catalog import Catalog, CatalogDeferred, public_text
 from apple_music_player.model import PlayerError
 
 from . import candidate
+from .baseline import release_group
 
 
 def fetch(catalog, artist_id, country, sleep=time.sleep):

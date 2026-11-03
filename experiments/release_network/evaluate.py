@@ -2,9 +2,9 @@
 
 import json
 
-from apple_music_player.catalog import release_group
 from apple_music_player.model import Album
 
+from .baseline import release_group
 from .network import LABELS, classify, encode, forward
 
 # Specification checks, not training examples or independent editorial labels.

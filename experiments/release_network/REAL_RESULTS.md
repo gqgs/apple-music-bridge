@@ -2,8 +2,8 @@
 
 The user requested a classifier designed from scratch rather than a neural copy
 of our existing rules. `candidate.py` implements that second experiment. It is
-unchanged since evaluation. A subsequent opt-in [UI integration](UI_TESTING.md)
-is available on the experimental branch; main remains unchanged. The measurements
+unchanged since evaluation. After opt-in live testing, the user requested it as the production default;
+see [integration status](UI_TESTING.md). The measurements
 below describe the frozen classifier, not end-to-end UI performance.
 
 ## Reproduce
@@ -117,7 +117,8 @@ This independently designed candidate behaves differently and improves one live
 case, but demonstrates **no aggregate gain** on the sourced sample and weaker
 behavior on adversarial titles. Weights remain unchanged despite those findings.
 
-Keep production unchanged. A future experiment could preregister richer inputs
+At evaluation time the recommendation was to keep production unchanged; the user
+subsequently accepted the network after live testing. A future experiment could preregister richer inputs
 and gather an independently adjudicated, broader evaluation set with Others cases.
 If this sample guides any edits, it becomes development feedback; a new untouched
 evaluation set would be required. No such tuning is included here.

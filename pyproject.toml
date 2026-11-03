@@ -29,4 +29,4 @@ select = ["E", "F", "I", "B"]
 
 [tool.ruff.lint.per-file-ignores]
 # Byte-identical copy of the frozen experiment; adjacent-token zip truncates intentionally.
-"src/apple_music_player/experimental_classifier.py" = ["B905"]
+"src/apple_music_player/release_classifier.py" = ["B905"]

@@ -1,7 +1,7 @@
 # Local OpenSubsonic bridge proof of concept
 
-Local branch `poc/opensubsonic-bridge`, based on main `22d9dce` (PR #6).
-No branch/PR publication or change to the desktop UI. This is a read-only API
+Draft PoC branch `poc/opensubsonic-bridge`, based on main `22d9dce` (PR #6).
+Published for review and testing; no change to the desktop UI. This is a read-only API
 subset, not a tested replacement for Navidrome or a promise of client compatibility.
 
 ## Run locally
@@ -176,4 +176,4 @@ with Atmos profile, disable client transcoding, select HDMI passthrough if the c
 supports it, and verify the soundbar's Atmos indication. Merely using libmpv or
 receiving E-AC-3 is insufficient. Note unsupported endpoint names without sharing
 credential-bearing URLs/logs. Resolve client protocol gaps and artwork terms before
-considering publication; this PoC intentionally remains a local branch.
+considering a merge; this PoC remains a draft for review and testing.

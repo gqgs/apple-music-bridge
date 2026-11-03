@@ -44,6 +44,31 @@ class Controller:
             self.queue.append(Entry(track, quality))
         self.protect()
 
+    def play_album(self, tracks, quality):
+        tracks = list(tracks)
+        if not tracks:
+            self.error = "This album has no playable catalog tracks."
+            return False
+        if any(self.reject_storefront(track) for track in tracks):
+            return False
+        # Keep the in-flight job attached until it finishes cancellation. New work starts
+        # only afterwards; its completion cannot affect the new Entry identities.
+        if self.cancel:
+            self.cancel.set()
+        self.player.close()
+        self.current = self.media = None
+        self.queue = []
+        seen = set()
+        for track in tracks:
+            key = track.key(quality)
+            if key not in seen:
+                seen.add(key)
+                self.queue.append(Entry(track, quality))
+        self.stopped = False
+        self.error = ""
+        self.protect()
+        return True
+
     def reject_storefront(self, track):
         regions = getattr(self.runtime, "regions", ()) if self.backend == "lite" else ()
         if len(regions) == 1 and track.country != regions[0]:
@@ -108,10 +133,11 @@ class Controller:
                     )
                     self.error = str(exc)
             except Exception:
-                entry.state = "Failed"
-                self.error = (
-                    "Could not store downloaded audio. Check cache permissions and free space."
-                )
+                if any(e is entry for e in self.queue):
+                    entry.state = "Failed"
+                    self.error = (
+                        "Could not store downloaded audio. Check cache permissions and free space."
+                    )
             finally:
                 if jobdir:
                     shutil.rmtree(jobdir)

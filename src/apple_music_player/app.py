@@ -109,6 +109,7 @@ class Window(QMainWindow):
         self.catalog_timer.timeout.connect(self.resume_catalog)
         self.generation = 0
         self.results = []
+        self.album_tracks = ()
         self.pending_result_kind = "songs"
         self.pending_album_title = ""
         self.rendered_queue = None
@@ -222,6 +223,10 @@ class Window(QMainWindow):
         result_buttons = QHBoxLayout()
         self.button(result_buttons, "Browse album", self.browse_album)
         self.selected_button = self.button(result_buttons, "Queue selected", self.add_selected)
+        self.play_album_button = self.button(
+            result_buttons, "Play album (replace queue)", self.play_album
+        )
+        self.play_album_button.setEnabled(False)
         self.all_button = self.button(result_buttons, "Queue all results", self.add_all)
         result_buttons.addStretch()
         self.quality = QComboBox()
@@ -494,6 +499,8 @@ class Window(QMainWindow):
         return button
 
     def invalidate_search(self, *_, clear=False):
+        self.album_tracks = ()
+        self.play_album_button.setEnabled(False)
         self.generation += 1
         self.catalog_timer.stop()
         self.catalog_request = None
@@ -591,6 +598,14 @@ class Window(QMainWindow):
                 self.browse_album()
             else:
                 self.controller.add(self.results[row], self.quality.currentData())
+
+    def play_album(self):
+        if self.album_tracks and self.controller.play_album(
+            self.album_tracks, self.quality.currentData()
+        ):
+            self.catalog_status.setText(
+                "Album starts from its first track · previous queue replaced"
+            )
 
     def add_all(self):
         for track in self.results:
@@ -728,6 +743,13 @@ class Window(QMainWindow):
                         result = None
                     if result is not None:
                         self.results = result
+                        self.album_tracks = (
+                            tuple(result)
+                            if self.pending_album_title
+                            and all(isinstance(item, Track) for item in result)
+                            else ()
+                        )
+                        self.play_album_button.setEnabled(bool(self.album_tracks))
                         self.result_list.clear()
                         self.result_list.addItems([track.title for track in self.results])
                         for index in range(self.result_list.count()):

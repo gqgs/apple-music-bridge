@@ -133,15 +133,34 @@ class Catalog:
         parse = self.albums if entity == "album" else self.tracks
         return parse(
             self.request(
-                "search", term=query[:200], country=country, media="music", entity=entity, limit=50
+                "search",
+                term=query[:200],
+                country=country,
+                media="music",
+                entity=entity,
+                limit=200 if entity == "album" else 50,
             ),
             country,
         )
 
     def album(self, album_id, country):
-        return self.tracks(
-            self.request("lookup", id=album_id, country=country, entity="song", limit=200), country
-        )
+        rows = self.request("lookup", id=album_id, country=country, entity="song", limit=200)
+        songs = [
+            row
+            for row in rows
+            if isinstance(row, dict)
+            and row.get("kind") == "song"
+            and str(row.get("collectionId", "")) == album_id
+        ]
+
+        # Prefer explicit disc/track ordering; preserve the API array if numbering is absent.
+        def number(row, key):
+            value = row.get(key)
+            return value if isinstance(value, int) and value > 0 else 0
+
+        if songs and all(number(row, "trackNumber") for row in songs):
+            songs.sort(key=lambda row: (number(row, "discNumber") or 1, number(row, "trackNumber")))
+        return self.tracks(songs, country)
 
 
 def recent_releases(albums, today=None):

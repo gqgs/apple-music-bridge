@@ -340,3 +340,39 @@ def test_output_changes_revoke_and_restore_without_resume(name, paused):
     assert not player.output_verified
     assert "passthrough active" not in player.output_label
     player.command.assert_called_once_with("set_property", "pause", True)
+
+
+def test_play_album_replaces_playing_and_cancels_prefetch_latest_wins(
+    tmp_path, audio, fake_downloader, fake_mpv, monkeypatch
+):
+    import shutil
+    from types import SimpleNamespace
+
+    cache = Cache(tmp_path / "cache", 1_000_000)
+    source = cache.staging / "old.m4a"
+    shutil.copyfile(audio["alac"], source)
+    cache.put(TRACK.key("lossless"), source, Media("alac", 44100, 16, 1))
+    c = Controller(cache, Mpv(fake_mpv))
+    c.runtime = SimpleNamespace(ready=True, store=SimpleNamespace(downloader=fake_downloader))
+    pidfile = tmp_path / "prefetch-pid"
+    monkeypatch.setenv("TEST_PID", str(pidfile))
+    monkeypatch.setenv("TEST_MODE", "hang")
+    c.add(TRACK, "lossless")
+    c.add(Track("us", "20", "Old prefetch"), "lossless")
+    try:
+        wait_until(lambda: (c.tick(), pidfile.exists() and c.current is not None)[1])
+        old_future = c.future
+        assert not c.play_album([], "lossless") and c.current is not None
+        c.play_album([Track("us", "30", "Superseded")], "lossless")
+        latest = [Track("us", "40", "First"), Track("us", "41", "Second")]
+        c.play_album(latest + [latest[0]], "lossless")
+        assert c.future is old_future and c.cancel.is_set()
+        assert c.current is None and [e.track.id for e in c.queue] == ["40", "41"]
+        monkeypatch.setenv("TEST_MODE", "ok")
+        wait_until(lambda: (c.tick(), c.current is not None and c.current.state == "Playing")[1])
+        assert c.current.track.id == "40" and not c.error
+        assert cache.get(TRACK.key("lossless"))  # Replacement does not delete existing cache.
+        assert cache.get(Track("us", "20", "").key("lossless")) is None
+        assert cache.get(Track("us", "30", "").key("lossless")) is None
+    finally:
+        c.close()

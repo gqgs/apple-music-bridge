@@ -220,7 +220,10 @@ class Artwork:
                 del self.pending[url]
                 self.revision += 1
         while len(self.images) > 64:
-            self.images.popitem(last=False)
+            # Every cover depends on this single badge. Evicting it toggles the
+            # whole layout while still-cached covers are being displayed.
+            oldest = next(key for key in self.images if key != BADGE_URL)
+            del self.images[oldest]
 
     def retryable(self):
         now = time.monotonic()

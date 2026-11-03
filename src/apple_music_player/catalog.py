@@ -9,7 +9,7 @@ from urllib.error import HTTPError
 from urllib.parse import urlencode
 from urllib.request import urlopen
 
-from .model import Album, PlayerError, Track
+from .model import Album, Artist, PlayerError, Track
 
 
 class CatalogDeferred(Exception):
@@ -19,6 +19,12 @@ class CatalogDeferred(Exception):
 
 
 class SearchResults(list):
+    def __init__(self, values, diagnostics):
+        super().__init__(values)
+        self.diagnostics = diagnostics
+
+
+class ArtistAlbums(list):
     def __init__(self, values, diagnostics):
         super().__init__(values)
         self.diagnostics = diagnostics
@@ -34,10 +40,17 @@ def public_result(row):
     # Strict public-metadata allowlist; never retain arbitrary response fields/URLs.
     if not isinstance(row, dict):
         return {"type": "invalid row"}
-    identifier = str(row.get("trackId", row.get("collectionId", "")))
+    artist = row.get("wrapperType") == "artist"
+    identifier = str(
+        row.get("artistId", "") if artist else row.get("trackId", row.get("collectionId", ""))
+    )
     return {
         "id": identifier if re.fullmatch(r"[0-9]{1,30}", identifier) else "",
-        "title": public_text(row.get("trackName", row.get("collectionName", ""))),
+        "title": public_text(
+            row.get("artistName", "")
+            if artist
+            else row.get("trackName", row.get("collectionName", ""))
+        ),
         "artist": public_text(row.get("artistName", "")),
         "wrapper_type": public_text(row.get("wrapperType", ""), 40),
         "kind": public_text(row.get("kind", row.get("collectionType", "")), 40),
@@ -86,12 +99,10 @@ class Catalog:
                 exc.close()
                 raise CatalogDeferred(delay, rate_limited=True) from None
             exc.close()
-            raise PlayerError(
-                "Catalog request failed. Try again later or paste a song URL."
-            ) from None
+            raise PlayerError("Catalog request failed. Try again later.") from None
         except Exception:
             raise PlayerError(
-                "Catalog unavailable. Check your network/storefront or paste a song URL."
+                "Catalog unavailable. Check your network/storefront and try again."
             ) from None
         if len(self.responses) >= 100:
             self.responses.clear()
@@ -169,20 +180,37 @@ class Catalog:
             )
         }
 
+    def artists(self, rows, country):
+        return [
+            Artist(
+                country,
+                str(row["artistId"]),
+                public_text(row["artistName"]),
+                public_text(row.get("primaryGenreName", "")),
+            )
+            for row in rows
+            if isinstance(row, dict)
+            and row.get("wrapperType") == "artist"
+            and re.fullmatch(r"[0-9]+", str(row.get("artistId", "")))
+            and public_text(row.get("artistName", ""))
+        ]
+
     def artist_albums(self, artist_id, country):
         if not re.fullmatch(r"[0-9]+", artist_id) or not re.fullmatch(r"[a-z]{2}", country):
             return []
-        return self.albums(
-            self.request("lookup", id=artist_id, country=country, entity="album", limit=200),
-            country,
-        )
+        params = dict(id=artist_id, country=country, entity="album", limit=200)
+        rows = self.request("lookup", **params)
+        albums = self.albums(rows, country)
+        diagnostics = self.diagnostics("lookup", params, rows, albums)
+        diagnostics["artist_id"] = artist_id
+        return ArtistAlbums(albums, diagnostics)
 
     def search(self, query, country, entity="song"):
         if not re.fullmatch("[a-z]{2}", country):
             raise PlayerError("Storefront must be a two-letter country code, e.g. us.")
-        if entity not in {"song", "album"}:
-            raise PlayerError("Choose Songs or Albums.")
-        parse = self.albums if entity == "album" else self.tracks
+        if entity not in {"song", "album", "musicArtist"}:
+            raise PlayerError("Choose Songs, Albums or Artists.")
+        parse = {"album": self.albums, "song": self.tracks, "musicArtist": self.artists}[entity]
         params = dict(
             term=query[:200],
             country=country,
@@ -190,16 +218,19 @@ class Catalog:
             entity=entity,
             limit=200 if entity == "album" else 50,
         )
-        key = "search?" + urlencode(params)
         rows = self.request("search", **params)
         accepted = parse(rows, country)
+        return SearchResults(accepted, self.diagnostics("search", params, rows, accepted))
+
+    def diagnostics(self, endpoint, params, rows, accepted):
+        key = endpoint + "?" + urlencode(params)
         source = self.last_response_source
-        diagnostics = {
-            "endpoint": "https://itunes.apple.com/search",
-            "query": public_text(params["term"], 200),
-            "storefront": country,
-            "media": "music",
-            "entity": entity,
+        return {
+            "endpoint": "https://itunes.apple.com/" + endpoint,
+            "query": public_text(params.get("term", ""), 200),
+            "storefront": params["country"],
+            "media": params.get("media", ""),
+            "entity": params["entity"],
             "limit": params["limit"],
             "source": source[1] if source and source[0] == key else "adapter (source unavailable)",
             "raw_result_count": len(rows),
@@ -211,7 +242,6 @@ class Catalog:
                 for item in accepted[:200]
             ],
         }
-        return SearchResults(accepted, diagnostics)
 
     def album(self, album_id, country):
         rows = self.request("lookup", id=album_id, country=country, entity="song", limit=200)
@@ -231,9 +261,7 @@ class Catalog:
                 **row,
                 "_album_artist": collection.get("artistName", "") or row.get("artistName", ""),
                 "_album_artist_id": (
-                    collection.get("artistId", "")
-                    if collection.get("artistName")
-                    else row.get("artistId", "")
+                    collection.get("artistId", "") if collection.get("artistName") else ""
                 ),
             }
             for row in rows
@@ -263,3 +291,54 @@ def recent_releases(albums, today=None):
         if today - timedelta(days=90) <= released <= today:
             found[(album.country, album.id)] = album
     return sorted(found.values(), key=lambda a: a.release_date, reverse=True)[:30]
+
+
+def release_group(album):
+    """Conservative title hints, not Apple Music editorial release types."""
+    title = album.album_title.strip()
+    # An explicitly marked live single remains a single; no track-count guesses.
+    if re.search(
+        r"(?:\s[-–—]\s*|[([][^)\]]*\b)(?:EP|Single|Sencill[oa]s?|Single digital)"
+        r"(?:[)\]])?$",
+        title,
+        re.IGNORECASE,
+    ):
+        return "Singles & EPs"
+    if re.search(
+        r"\b(?:greatest hits|compilation|compilações|compilación|coletânea)\b", title, re.IGNORECASE
+    ):
+        return "Compilations"
+    if re.fullmatch(r"(?:the )?(?:best of|anthology|antologia|antología)", title, re.IGNORECASE):
+        return "Compilations"
+    if album.artist and title.casefold() in {
+        "best of " + album.artist.casefold(),
+        "the best of " + album.artist.casefold(),
+    }:
+        return "Compilations"
+    if re.search(
+        r"(?:[([]|\s[-–—]\s*)(?:live|ao vivo|en vivo)(?:\b[^)\]]*)[)\]]?$"
+        r"|^(?:live (?:at|in|from)|ao vivo|en vivo)\b",
+        title,
+        re.IGNORECASE,
+    ):
+        return "Live Albums"
+    if re.search(
+        r"(?:\s[-–—]\s*|[([])(?:studio album|album|álbum|LP)[)\]]?$", title, re.IGNORECASE
+    ):
+        return "Albums"
+    return "Albums" if title else "Others"
+
+
+def grouped_releases(albums):
+    def order(album):
+        try:
+            released = date.fromisoformat(album.release_date[:10]).toordinal()
+        except ValueError:
+            released = 0
+        return (-released, album.album_title.casefold(), album.country, album.id)
+
+    return [
+        (group, sorted((a for a in albums if release_group(a) == group), key=order))
+        for group in ("Albums", "Singles & EPs", "Live Albums", "Compilations", "Others")
+        if any(release_group(a) == group for a in albums)
+    ]

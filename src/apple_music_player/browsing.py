@@ -1,9 +1,10 @@
 """Small native album panels shared by Home, catalog detail and now playing."""
 
+import re
 from urllib.parse import urlsplit
 
 from PySide6.QtCore import QEvent, QRect, QSize, Qt, Signal
-from PySide6.QtGui import QColor, QIcon, QPalette, QPixmap
+from PySide6.QtGui import QColor, QIcon, QImage, QPalette, QPixmap
 from PySide6.QtWidgets import (
     QApplication,
     QFrame,
@@ -19,6 +20,7 @@ from PySide6.QtWidgets import (
 )
 
 from .artwork import BADGE_URL, allowed_url
+from .model import Artist
 
 
 def store_link(album):
@@ -41,6 +43,33 @@ def placeholder():
     pixmap = QPixmap(100, 100)
     pixmap.fill(QColor("#264653"))
     return QIcon(pixmap)
+
+
+def set_artwork_icon(target, image):
+    """Change decoration only when its source image changes, not on every poll."""
+    key = image.cacheKey() if not image.isNull() else 0
+    role = Qt.UserRole + 10
+    is_item = not isinstance(target, QWidget)
+    previous = target.data(role) if is_item else getattr(target, "_artwork_key", None)
+    if previous == key:
+        return
+    if is_item:
+        target.setData(role, key)
+    else:
+        target._artwork_key = key
+    target.setIcon(QIcon(QPixmap.fromImage(image)) if key else placeholder())
+
+
+def set_artwork_pixmap(target, image):
+    key = image.cacheKey() if not image.isNull() else 0
+    if getattr(target, "_artwork_key", None) == key:
+        return
+    target._artwork_key = key
+    target.setPixmap(
+        QPixmap.fromImage(image).scaled(100, 100, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+        if key
+        else placeholder().pixmap(100, 100)
+    )
 
 
 class TrackRowDelegate(QStyledItemDelegate):
@@ -91,14 +120,14 @@ class AlbumCard(QFrame):
         layout = QVBoxLayout(self)
         layout.setAlignment(Qt.AlignTop)
         self.cover = QPushButton()
-        self.cover.setIcon(placeholder())
+        set_artwork_icon(self.cover, QImage())
         self.cover.setIconSize(QSize(100, 100))
         self.cover.setFixedHeight(110)
         self.cover.setAccessibleName("Open " + album.title)
         self.cover.installEventFilter(self)
         self.cover.clicked.connect(lambda: opened(album))
         layout.addWidget(self.cover)
-        self.title = QLabel(album.album_title or album.title)
+        self.title = QLabel(album.release_title)
         self.title.setTextFormat(Qt.PlainText)
         self.title.setWordWrap(True)
         self.title.setStyleSheet("font-weight: 600")
@@ -126,15 +155,17 @@ class AlbumCard(QFrame):
             return
         badge = self.artwork.get(BADGE_URL)
         if badge.isNull():
-            self.cover.setIcon(placeholder())
+            set_artwork_icon(self.cover, QImage())
             return
         image = self.artwork.get(self.album.artwork_url)
         if not image.isNull():
-            self.cover.setIcon(QIcon(QPixmap.fromImage(image)))
+            set_artwork_icon(self.cover, image)
 
 
 class AlbumHeader(QWidget):
     """One album identity above its compact track list; no per-track artwork."""
+
+    artist_opened = Signal(object)
 
     def __init__(self, artwork):
         super().__init__()
@@ -142,15 +173,23 @@ class AlbumHeader(QWidget):
         row = QHBoxLayout(self)
         self.cover = QLabel()
         self.cover.setFixedSize(100, 100)
-        self.cover.setPixmap(placeholder().pixmap(100, 100))
+        set_artwork_pixmap(self.cover, QImage())
         row.addWidget(self.cover, 0, Qt.AlignTop)
         text = QVBoxLayout()
         self.title = QLabel()
         self.title.setTextFormat(Qt.PlainText)
         self.title.setWordWrap(True)
         self.title.setStyleSheet("font-size: 20px; font-weight: 600")
-        self.artist = QLabel()
-        self.artist.setTextFormat(Qt.PlainText)
+        self.artist = QPushButton()
+        self.artist.setFlat(True)
+        self.artist.setCursor(Qt.PointingHandCursor)
+        self.artist.setStyleSheet(
+            "QPushButton { text-align: left; padding: 2px; border: 1px solid transparent; }"
+            "QPushButton:enabled { color: palette(link); text-decoration: underline; }"
+            "QPushButton:enabled:hover, QPushButton:enabled:focus {"
+            " border: 1px solid palette(highlight); }"
+        )
+        self.artist.clicked.connect(self.open_artist)
         self.details = QLabel()
         self.details.setTextFormat(Qt.PlainText)
         text.addWidget(self.title)
@@ -166,25 +205,38 @@ class AlbumHeader(QWidget):
         self.setVisible(album is not None)
         if album:
             self.title.setText(album.album_title or album.title.removesuffix(" — " + album.artist))
-            self.artist.setText(album.artist)
+            self.artist.setText(album.artist.replace("&", "&&"))
+            available = bool(album.artist and re.fullmatch(r"[0-9]+", album.artist_id))
+            self.artist.setEnabled(available)
+            self.artist.setCursor(Qt.PointingHandCursor if available else Qt.ArrowCursor)
+            self.artist.setAccessibleName(
+                ("Open artist albums: " if available else "Album artist: ") + album.artist
+            )
+            self.artist.setToolTip(
+                "Open this artist’s albums in the player"
+                if available
+                else "The catalog did not provide an album artist ID"
+            )
             self.details.setText(
                 " · ".join(x for x in (album.release_date[:10], f"{count} tracks") if x)
             )
-            self.cover.setPixmap(placeholder().pixmap(100, 100))
+            set_artwork_pixmap(self.cover, QImage())
+
+    def open_artist(self):
+        if self.album and self.artist.isEnabled():
+            self.artist_opened.emit(
+                Artist(self.album.country, self.album.artist_id, self.album.artist)
+            )
 
     def refresh(self):
         if not self.album or not allowed_url(self.album.artwork_url):
             return
         if self.artwork.get(BADGE_URL).isNull():
-            self.cover.setPixmap(placeholder().pixmap(100, 100))
+            set_artwork_pixmap(self.cover, QImage())
             return
         image = self.artwork.get(self.album.artwork_url)
         if not image.isNull():
-            self.cover.setPixmap(
-                QPixmap.fromImage(image).scaled(
-                    100, 100, Qt.KeepAspectRatio, Qt.SmoothTransformation
-                )
-            )
+            set_artwork_pixmap(self.cover, image)
 
 
 class Shelf(QWidget):
@@ -223,3 +275,24 @@ class Shelf(QWidget):
     def refresh(self):
         for card in self.cards:
             card.refresh()
+
+
+def release_heading(title, parent):
+    """A high-contrast, spaced section label with a separator, never a release."""
+    widget = QWidget(parent)
+    widget.setAutoFillBackground(True)
+    widget.setBackgroundRole(QPalette.Base)
+    layout = QVBoxLayout(widget)
+    layout.setContentsMargins(4, 12, 4, 6)
+    layout.setSpacing(4)
+    label = QLabel(title)
+    label.setTextFormat(Qt.PlainText)
+    font = label.font()
+    font.setBold(True)
+    label.setFont(font)
+    layout.addWidget(label)
+    line = QFrame()
+    line.setFrameShape(QFrame.HLine)
+    layout.addWidget(line)
+    widget.setAccessibleName(title + " releases")
+    return widget

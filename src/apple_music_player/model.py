@@ -1,10 +1,19 @@
 from dataclasses import dataclass
+from datetime import date
 from hashlib import sha256
 from urllib.parse import parse_qs, urlparse
 
 
 class PlayerError(Exception):
     """Only fixed, safe-to-display messages cross the worker/UI boundary."""
+
+
+@dataclass(frozen=True)
+class Artist:
+    country: str
+    id: str
+    title: str
+    genre: str = ""
 
 
 @dataclass(frozen=True)
@@ -18,6 +27,18 @@ class Album:
     artwork_url: str = ""
     release_date: str = ""
     store_url: str = ""
+
+    @property
+    def release_year(self):
+        try:
+            return str(date.fromisoformat(self.release_date[:10]).year)
+        except ValueError:
+            return ""
+
+    @property
+    def release_title(self):
+        title = self.album_title or self.title
+        return title + (f" ({self.release_year})" if self.release_year else "")
 
     @property
     def url(self):

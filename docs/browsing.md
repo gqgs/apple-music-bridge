@@ -26,7 +26,7 @@ After opening an album, **Play album** stops current playback, cancels an active
 
 Album search now requests the documented maximum of 200 results instead of 50; song searches remain at 50. The [documented API](https://performance-partners.apple.com/search-api) provides a limit but no documented search pagination parameter. There is no local title/artist relevance filter: the entered query is sent as `term`, with `media=music`, `entity=album` and the selected storefront. Returned collection records are validated as albums; this is not a guarantee of full subscription-catalog coverage or relevance.
 
-The reported `faye webster Atlanta Millionaires Club` omission is not yet reproduced against a live iTunes search response. Apple's [BR album page](https://music.apple.com/br/album/atlanta-millionaires-club/1452886606) confirms the album and provides its direct URL, which can be pasted into Open URL to request collection lookup independently of search ranking. The larger limit is a bounded improvement, not a proven fix for that specific omission. Synthetic regression fixtures exercise the exact query and URL.
+The reported `faye webster Atlanta Millionaires Club` omission is not yet reproduced against a live iTunes search response. Apple's [BR album page](https://music.apple.com/br/album/atlanta-millionaires-club/1452886606) confirms the album. The user reports that exact artist browsing finds the relevant releases even when album-name search omits them. The larger limit is a bounded improvement, not a proven fix for that specific omission. Synthetic regression fixtures exercise the exact query and URL.
 
 The album layout now follows the agreed text requirements: one cover/title/artist/release-date/track-count header, adjacent Play album and Queue album buttons, and compact text-only rows containing track number, title — album artist, and a right-aligned duration. Changing track selection no longer creates a second album pane. Empty playback/error labels stop consuming vertical space; active media/output/fallback labels remain visible. The single shared badge retains the contextual catalog destination without repeated store text controls.
 
@@ -43,3 +43,54 @@ If a search returns an unrelated album, wait for the search to finish, then sele
 Diagnostics are attached to each completed search result, rather than read from a mutable worker-wide latest response. Superseded futures cannot update the snapshot. Home artist lookups and album navigation do not overwrite it, and the report indicates when those views have replaced the search display. Editing the search text leaves old results visible with an explicit reminder to press Search; completed searches label the query that produced them.
 
 The exact reported `Atlanta Millionaires Club` → `Season Of The Witch - Single — Alanis Morissette` mismatch is fixture-tested without suppressing the unexpected album. Request construction includes term, BR country, music media, album entity and limit200; cache keys include endpoint and all parameters. Distinct requests, cached responses and sequential Home/search/album navigation are tested. No live response has yet established whether the user's mismatch originates in upstream results, transport caching or application state. This instrumentation does not claim the omission is fixed, and no additional query/ranking tweak was made.
+
+## Artist browsing
+
+Choose **Artists** in Search, then **Open artist** (or double-click) to request albums by the returned artist ID and the selected storefront. Artist results show name and available genre, without misleading album artwork. Open an album to use the existing ordered track view, Play album and Queue album. Songs, collections and artists retain separate IDs. BR remains the default storefront; Artists is the default search mode.
+
+The documented music search entity is `musicArtist`; album lookup uses `id=<artistId>&country=<storefront>&entity=album&limit=200`. See [Search parameters](https://performance-partners.apple.com/search-api) and [official Lookup examples](https://developer.apple.com/library/archive/documentation/AudioVideo/Conceptual/iTuneSearchAPI/LookupExamples.html). This is a limited public catalog selection, not a complete Apple Music discography. Existing spacing, bounded retry, cache and latest-request handling apply.
+
+**Copy search diagnostics** now includes the last explicitly opened artist-album lookup alongside the last search: endpoint, artist ID, country, raw count and allowlisted public result IDs/titles. Home release lookups do not replace it. Diagnostics remain in memory until explicitly copied. This allows comparing the Faye Webster search with exact artist lookup without account files or raw logs. The reported missing Atlanta Millionaires Club / unrelated search result is still unresolved: live iTunes responses could not be verified in this environment, and fixture tests do not establish catalog coverage.
+
+Synthetic artist-search previews: [normal viewport](artist-search.png) and [small viewport at 150% scale](artist-search-small.png). These use neutral fixture artists and no account, runtime or live artwork.
+
+## Search repaint stability
+
+The 100 ms status poll previously assigned new icons/pixmaps even when their source image was unchanged. A sustained 19-row synthetic search produced 228 model changes in 1.2 seconds in Albums and Songs. Decoration updates now compare the source image identity (including the placeholder state), so idle polls do not mutate row decorations, covers or the shared badge. Artwork completion/failure and explicit retries still update normally. The same normal/high-DPI probe now observes zero idle row changes; Artists also remains at zero.
+
+Six real-event-loop regression cases cover all search modes with delayed artwork success/failure, preserving selection, scroll and the existing detail widget. [Normal](search-stable.png) and [small/high-DPI](search-stable-small.png) screenshots use synthetic fixtures, not the user's recording. The supplied recording could not be transferred for inspection; the fix is grounded in independent reproduction, not claimed visual confirmation of that recording.
+
+The larger-result follow-up found a separate layout loop missed by the 19-row test: fetching every result's artwork overflowed the 64-image memory LRU and evicted the shared badge. Reloading that badge repeatedly hid/showed its strip, resizing the browsing area about five times per second (200 distinct synthetic covers; about 85 reloads/second). Search now requests cover images only for visible rows, plus the existing selected/detail/now-playing consumers. The badge is retained within the same bounded 64-image budget. Scrolling still requests newly visible artwork.
+
+The 200-result probe now records no idle paint/resize/layout/show/hide events for four seconds after initial loading, at normal and 150% scaling. Additional event-loop regressions cover 200 album/artist results, success/failure, scroll, resize and steady managed-status polling; a cache test proves the badge survives eviction without growing the memory budget. This is independent synthetic reproduction; the user's inaccessible recording and real desktop behavior still require local retesting.
+
+## Album artist navigation and portrait availability
+
+The album header's artist name is a keyboard-accessible internal navigation button. It opens albums using the collection's artist ID and storefront, without affecting playback or queue contents. Missing/invalid IDs leave the name disabled with an explanation. A compilation uses its returned collection artist identity when available; a guest track performer is never substituted for a missing album artist ID. Failed requests retain the displayed album for retry; newer navigation supersedes older responses.
+
+Artist portraits are not implemented. Apple's [Artist attributes](https://developer.apple.com/documentation/applemusicapi/artists/attributes-data.dictionary) explicitly define artist image artwork, but [Apple Music API](https://developer.apple.com/documentation/applemusicapi/) requests require a developer token. Our public [iTunes response documentation](https://developer.apple.com/library/archive/documentation/AudioVideo/Conceptual/iTuneSearchAPI/UnderstandingSearchResults.html) describes optional media artwork, not a guaranteed artist-portrait field. No live public artist response with genuine portrait provenance could be verified in this environment. Artist results therefore stay text-only; no album-cover substitution, guessed image URLs, new credentials or web scraping are introduced. The wrapper session does not supply the separate developer token.
+
+
+## Artist release groups
+
+Artist pages show Albums, Singles & EPs, Live Albums, Compilations, then Others, omitting empty groups. Spaced, bold headings with separator lines cannot be selected or queued. Each group sorts newest returned release date first; missing/invalid dates are last, with title/country/ID ties deterministic. Release rows and cards append a year only from a valid returned date. Original titles are unchanged; the album-detail header keeps its existing release-date line instead of repeating a year. Dates may describe reissues rather than original publication.
+
+The public iTunes [result documentation](https://developer.apple.com/library/archive/documentation/AudioVideo/Conceptual/iTuneSearchAPI/UnderstandingSearchResults.html) does not define editorial album/EP/live/compilation flags. Its collection type Album is not evidence of a major studio LP. The separate [Apple Music album attributes](https://developer.apple.com/documentation/applemusicapi/albums/attributes-data.dictionary) describe compilation information, but those are not fields we can assume in the public iTunes response. Live public iTunes payload verification remains unavailable in this environment; no denied route was retried.
+
+Our mutually exclusive groups are title heuristics, in this priority:
+- Singles & EPs: final separated EP/Single markers, including parenthesized labels such as UK CD1 Single. Supported Spanish single markers include Sencillo/Sencilla and their plurals.
+- Compilations: explicit Greatest Hits, Compilation, Compilación, Compilações or Coletânea phrases; exact Anthology/Antologia/Antología or Best Of titles; or Best Of followed by the actual artist name.
+- Live Albums: explicit parenthesized/bracketed or dash-separated Live/Ao Vivo/En Vivo markers, or Live at/in/from prefixes. Bare words such as Live Forever, I Live or Cornucopia Live are ambiguous and use the Albums fallback.
+- Albums: explicit final Album/Álbum/Studio Album/LP markers and all otherwise unmarked titled releases, as requested. This is a practical default, not verified studio-album classification.
+- Others: releases without a usable title. Unknown titled releases now appear in Albums; an unmarked single, live recording or compilation can consequently appear there too.
+
+No track-count thresholds, guessed editorial fields, artist-specific hardcoded catalogs or translated-label guesses beyond the listed markers are used. [Apple's public Björk page](https://music.apple.com/us/artist/bj%C3%B6rk/295015?uo=4) supplies source names for tests (Human Behaviour (UK Remixes) - EP, Big Time Sensuality (UK CD1 Single), Vulnicura (Live), Björk's Greatest Hits, Fossora, Bastards). It also shows overlapping editorial categories. Our fixtures test the stated heuristic, not equality with Apple's taxonomy; Bastards and Fossora use the approximate Albums fallback without title hints.
+
+Artists is the initial search mode. Direct song/album URL controls are removed; internal canonical playback URLs and parsing remain. The user accepts artist browsing as the practical workaround for public album-search omissions; no extra diagnostic UI was added.
+
+Synthetic grouped artist previews: [normal](artist-groups.png) and [small/high-DPI](artist-groups-small.png).
+
+
+## Back navigation
+
+**← Back** or **Alt+Left** restores up to 20 prior inspection views in memory, including search text/mode/storefront, selected result, result-list/page scroll and Home shelf positions. It reuses the displayed metadata snapshot without a catalog request and never changes playback or the queue. Opening an album/artist records the return view; repeated clicks while loading share that destination. Back cancels pending/cooldown work, and late responses cannot overwrite the restored view. A new explicit search starts a new navigation trail. This history is session-only and is distinct from listening history.

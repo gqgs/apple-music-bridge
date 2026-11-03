@@ -547,7 +547,7 @@ def test_album_header_compact_rows_badge_and_search_transition(app, tmp_path, mo
         assert window.play_album_button.isEnabled() and window.all_button.isEnabled()
         for index in range(10):
             item = window.result_list.item(index)
-            assert item.text() == f"{index + 1:02d}  Track {index + 1}"
+            assert item.text() == f"{index + 1:02d}  Track {index + 1} — Fixture artist"
             assert item.icon().isNull()
             assert window.result_list.visualItemRect(item).height() <= 32
         window.result_list.setCurrentRow(5)
@@ -587,3 +587,67 @@ def test_album_header_without_artwork_does_not_request_badge(app):
         # destroyed while QApplication is alive, not during interpreter shutdown.
         header.deleteLater()
         QCoreApplication.sendPostedEvents(None, QEvent.DeferredDelete)
+
+
+def test_text_rows_duration_column_and_short_play_label(app, tmp_path, monkeypatch):
+    from PySide6.QtCore import Qt
+
+    from apple_music_player.browsing import TrackRowDelegate
+
+    window = Window(tmp_path / "cache")
+    window.startup_attempted = True
+    monkeypatch.setattr(window.controller, "tick", lambda: None)
+    rows = [
+        dict(
+            wrapperType="collection",
+            collectionId=201,
+            artistName="Album artist",
+            collectionName="Fixture Album",
+        ),
+        dict(
+            kind="song",
+            collectionId=201,
+            trackId=1,
+            artistName="Performer",
+            trackName="First",
+            discNumber=1,
+            trackNumber=1,
+            trackTimeMillis=125000,
+        ),
+        dict(
+            kind="song",
+            collectionId=201,
+            trackId=2,
+            artistName="Performer",
+            trackName="Second",
+            discNumber=2,
+            trackNumber=1,
+        ),
+    ]
+    monkeypatch.setattr(window.catalog, "request", lambda *a, **k: rows)
+    window.show()
+    try:
+        window.open_album(Album("br", "201", "Fixture Album"))
+        wait_until(
+            lambda: (app.processEvents(), window.tick(), window.play_album_button.isEnabled())[2]
+        )
+        assert window.play_album_button.text() == "Play album"
+        assert "Replace" in window.play_album_button.toolTip()
+        assert window.result_list.item(0).text() == "1.01  First — Album artist"
+        assert window.result_list.item(1).text() == "2.01  Second — Album artist"
+        assert window.result_list.item(0).data(TrackRowDelegate.duration_role) == "2:05"
+        assert window.result_list.item(1).data(TrackRowDelegate.duration_role) == "—"
+        delegate = window.result_list.itemDelegate()
+        assert delegate.duration_alignment & Qt.AlignRight
+        for index in range(2):
+            item = window.result_list.item(index)
+            assert item.icon().isNull()
+            rect = window.result_list.visualItemRect(item)
+            duration_rect = delegate.duration_rect(rect, window.result_list.fontMetrics())
+            assert duration_rect.left() > rect.center().x()
+            assert 0 <= rect.right() - duration_rect.right() <= 12
+        window.resize(1000, 480)
+        app.processEvents()
+        assert window.height() == 480
+    finally:
+        window.close()

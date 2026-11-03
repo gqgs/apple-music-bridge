@@ -2,14 +2,18 @@
 
 from urllib.parse import urlsplit
 
-from PySide6.QtCore import QSize, Qt, QUrl
-from PySide6.QtGui import QColor, QDesktopServices, QIcon, QPixmap
+from PySide6.QtCore import QRect, QSize, Qt, QUrl
+from PySide6.QtGui import QColor, QDesktopServices, QIcon, QPalette, QPixmap
 from PySide6.QtWidgets import (
+    QApplication,
     QFrame,
     QHBoxLayout,
     QLabel,
     QPushButton,
     QScrollArea,
+    QStyle,
+    QStyledItemDelegate,
+    QStyleOptionViewItem,
     QVBoxLayout,
     QWidget,
 )
@@ -37,6 +41,43 @@ def placeholder():
     pixmap = QPixmap(100, 100)
     pixmap.fill(QColor("#264653"))
     return QIcon(pixmap)
+
+
+class TrackRowDelegate(QStyledItemDelegate):
+    """Native selection with a separate right-aligned text duration column."""
+
+    duration_role = Qt.UserRole + 1
+    duration_alignment = Qt.AlignRight | Qt.AlignVCenter
+
+    @staticmethod
+    def duration_rect(rect, metrics):
+        width = metrics.horizontalAdvance("00:00:00") + 12
+        return QRect(rect.right() - width - 8, rect.top(), width, rect.height())
+
+    def paint(self, painter, option, index):
+        duration = index.data(self.duration_role)
+        if duration is None:
+            super().paint(painter, option, index)
+            return
+        opt = QStyleOptionViewItem(option)
+        self.initStyleOption(opt, index)
+        text, opt.text = opt.text, ""
+        style = opt.widget.style() if opt.widget else QApplication.style()
+        style.drawControl(QStyle.CE_ItemViewItem, opt, painter, opt.widget)
+        right = self.duration_rect(opt.rect, opt.fontMetrics)
+        left = opt.rect.adjusted(4, 0, -(right.width() + 24), 0)
+        painter.save()
+        painter.setClipRect(opt.rect)
+        painter.setFont(opt.font)
+        role = QPalette.HighlightedText if opt.state & QStyle.State_Selected else QPalette.Text
+        painter.setPen(opt.palette.color(role))
+        painter.drawText(right, self.duration_alignment, duration)
+        painter.drawText(
+            left,
+            Qt.AlignLeft | Qt.AlignVCenter,
+            opt.fontMetrics.elidedText(text, Qt.ElideRight, max(0, left.width())),
+        )
+        painter.restore()
 
 
 class AlbumCard(QFrame):

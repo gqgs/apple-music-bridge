@@ -30,7 +30,7 @@ from PySide6.QtWidgets import (
 )
 
 from .artwork import BADGE_URL, Artwork, allowed_url
-from .browsing import AlbumCard, AlbumHeader, Shelf, placeholder, store_link
+from .browsing import AlbumCard, AlbumHeader, Shelf, TrackRowDelegate, placeholder, store_link
 from .cache import Cache
 from .catalog import Catalog, CatalogDeferred, recent_releases
 from .controller import Controller
@@ -214,6 +214,7 @@ class Window(QMainWindow):
         self.album_header = AlbumHeader(self.artwork)
         layout.addWidget(self.album_header)
         self.result_list = QListWidget()
+        self.result_list.setItemDelegate(TrackRowDelegate(self.result_list))
         self.result_list.itemDoubleClicked.connect(lambda _: self.add_selected())
         self.result_list.setIconSize(QSize(100, 100))
         self.result_list.currentRowChanged.connect(self.show_selected_album)
@@ -225,8 +226,9 @@ class Window(QMainWindow):
         result_buttons = self.result_buttons = QHBoxLayout()
         self.browse_button = self.button(result_buttons, "Browse album", self.browse_album)
         self.selected_button = self.button(result_buttons, "Queue selected", self.add_selected)
-        self.play_album_button = self.button(
-            result_buttons, "Play album (replace queue)", self.play_album
+        self.play_album_button = self.button(result_buttons, "Play album", self.play_album)
+        self.play_album_button.setToolTip(
+            "Replace the current queue and play this album from the first track."
         )
         self.play_album_button.setEnabled(False)
         self.all_button = self.button(result_buttons, "Queue all results", self.add_all)
@@ -776,15 +778,17 @@ class Window(QMainWindow):
                         self.show_album_header()
                         self.result_list.clear()
                         if self.album_header.album:
+                            multiple_discs = any(track.disc_number > 1 for track in self.results)
                             self.result_list.addItems(
-                                [
-                                    f"{index + 1:02d}  "
-                                    + track.title.removesuffix(" — " + track.artist)
-                                    for index, track in enumerate(self.results)
-                                ]
+                                [track.album_row_title(multiple_discs) for track in self.results]
                             )
-                            for index in range(self.result_list.count()):
-                                self.result_list.item(index).setSizeHint(QSize(0, 30))
+                            for index, track in enumerate(self.results):
+                                item = self.result_list.item(index)
+                                item.setData(TrackRowDelegate.duration_role, track.duration_label)
+                                item.setData(
+                                    Qt.AccessibleDescriptionRole, "Duration " + track.duration_label
+                                )
+                                item.setSizeHint(QSize(0, 30))
                         else:
                             self.result_list.addItems([track.title for track in self.results])
                             for index in range(self.result_list.count()):

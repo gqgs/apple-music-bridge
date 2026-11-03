@@ -84,10 +84,20 @@ class Catalog:
                     str(row["trackId"]),
                     title[:300],
                     str(row.get("collectionId", "")),
+                    track_name=str(row.get("trackName", "Untitled"))[:300],
+                    album_artist=str(row.get("_album_artist") or "")[:300],
+                    album_artist_id=str(row.get("_album_artist_id") or "")[:30],
+                    track_number=self.positive_number(row.get("trackNumber")),
+                    disc_number=self.positive_number(row.get("discNumber")),
+                    duration_ms=self.positive_number(row.get("trackTimeMillis")),
                     **self.metadata(row),
                 )
             )
         return result
+
+    @staticmethod
+    def positive_number(value):
+        return value if type(value) is int and value > 0 else 0
 
     def albums(self, data, country):
         return [
@@ -156,7 +166,16 @@ class Catalog:
             {},
         )
         songs = [
-            {**collection, **row}
+            {
+                **collection,
+                **row,
+                "_album_artist": collection.get("artistName", "") or row.get("artistName", ""),
+                "_album_artist_id": (
+                    collection.get("artistId", "")
+                    if collection.get("artistName")
+                    else row.get("artistId", "")
+                ),
+            }
             for row in rows
             if isinstance(row, dict)
             and row.get("kind") == "song"

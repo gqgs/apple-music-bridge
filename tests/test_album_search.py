@@ -338,3 +338,50 @@ def test_play_album_ui_loading_empty_error_and_repeat(app, tmp_path, monkeypatch
         assert [e.track.id for e in window.controller.queue] == ["12346", "12347"]
     finally:
         window.close()
+
+
+def test_album_artist_duration_and_multidisc_rows(monkeypatch):
+    catalog = Catalog()
+    collection = dict(ALBUM, artistName="Various Artists", artistId=99)
+    rows = [
+        collection,
+        dict(
+            SONGS[0],
+            artistName="Guest A",
+            artistId=10,
+            trackId=1,
+            trackName="Finale",
+            trackNumber=1,
+            discNumber=2,
+            trackTimeMillis=3661000,
+        ),
+        dict(
+            SONGS[1],
+            artistName="Guest B",
+            artistId=11,
+            trackId=2,
+            trackName="Opening",
+            trackNumber=1,
+            discNumber=1,
+            trackTimeMillis=209900,
+        ),
+    ]
+    monkeypatch.setattr(catalog, "request", lambda *a, **k: rows)
+    tracks = catalog.album("12345", "br")
+    assert [t.id for t in tracks] == ["2", "1"]
+    assert tracks[0].album_row_title(True) == "1.01  Opening — Various Artists"
+    assert tracks[1].album_row_title(True) == "2.01  Finale — Various Artists"
+    assert [t.duration_label for t in tracks] == ["3:29", "1:01:01"]
+    assert tracks[0].artist == "Guest B" and tracks[0].album.artist == "Various Artists"
+    assert tracks[0].album.artist_id == "99"
+    collection.pop("artistId")
+    assert catalog.album("12345", "br")[0].album.artist_id == ""
+    rows.remove(collection)
+    assert catalog.album("12345", "br")[0].album_row_title(True) == "1.01  Opening — Guest B"
+
+
+@pytest.mark.parametrize("duration", [None, "unknown", "123000", -10, 0, True, 2.5])
+def test_missing_or_invalid_duration_is_not_invented(duration):
+    track = Catalog().tracks([dict(SONGS[0], trackTimeMillis=duration)], "br")[0]
+    assert track.duration_label == "—"
+    assert track.album_row_title() == "—  Winter — Daughter"

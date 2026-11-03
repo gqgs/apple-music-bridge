@@ -37,6 +37,30 @@ class Track:
     release_date: str = ""
     store_url: str = ""
 
+    track_name: str = ""
+    album_artist: str = ""
+    album_artist_id: str = ""
+    track_number: int = 0
+    disc_number: int = 0
+    duration_ms: int = 0
+
+    @property
+    def duration_label(self):
+        if not self.duration_ms:
+            return "—"
+        seconds = self.duration_ms // 1000
+        if seconds >= 3600:
+            return f"{seconds // 3600}:{seconds // 60 % 60:02}:{seconds % 60:02}"
+        return f"{seconds // 60}:{seconds % 60:02}"
+
+    def album_row_title(self, multiple_discs=False):
+        number = f"{self.track_number:02}" if self.track_number else "—"
+        if multiple_discs:
+            number = f"{self.disc_number or '—'}.{number}"
+        title = self.track_name or self.title.removesuffix(" — " + self.artist)
+        artist = self.album_artist or self.artist
+        return f"{number}  {title}" + (f" — {artist}" if artist else "")
+
     @property
     def album(self):
         if not self.album_id:
@@ -44,9 +68,12 @@ class Track:
         return Album(
             self.country,
             self.album_id,
-            f"{self.album_title or 'Album ' + self.album_id} — {self.artist}",
-            self.artist,
-            self.artist_id,
+            f"{self.album_title or 'Album ' + self.album_id} — {self.album_artist or self.artist}",
+            self.album_artist or self.artist,
+            self.album_artist_id
+            or (
+                self.artist_id if not self.album_artist or self.album_artist == self.artist else ""
+            ),
             self.album_title,
             self.artwork_url,
             self.release_date,

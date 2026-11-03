@@ -32,10 +32,17 @@ from PySide6.QtWidgets import (
 from .artwork import BADGE_URL, Artwork, allowed_url
 from .browsing import AlbumCard, AlbumHeader, Shelf, TrackRowDelegate, placeholder, store_link
 from .cache import Cache
-from .catalog import Catalog, CatalogDeferred, SearchResults, public_text, recent_releases
+from .catalog import (
+    ArtistAlbums,
+    Catalog,
+    CatalogDeferred,
+    SearchResults,
+    public_text,
+    recent_releases,
+)
 from .controller import Controller
 from .library import History
-from .model import Album, PlayerError, Track, parse_url
+from .model import Album, Artist, PlayerError, Track, parse_url
 from .playback import Mpv
 
 GIB = 1024**3
@@ -111,10 +118,13 @@ class Window(QMainWindow):
         self.generation = 0
         self.results = []
         self.last_search_diagnostics = None
+        self.last_artist_diagnostics = None
+        self.displayed_artist_diagnostics = None
         self.displayed_search_diagnostics = None
         self.album_tracks = ()
         self.pending_result_kind = "songs"
         self.pending_album_title = ""
+        self.pending_artist_name = ""
         self.rendered_queue = None
         outer = QWidget()
         self.setCentralWidget(outer)
@@ -180,13 +190,14 @@ class Window(QMainWindow):
         layout.addWidget(catalog_note)
         search_row = QHBoxLayout()
         self.search = QLineEdit()
-        self.search.setPlaceholderText("Search songs or artists")
+        self.search.setPlaceholderText("Search albums, songs or artists")
         self.search.textChanged.connect(self.search_input_changed)
         self.search.returnPressed.connect(self.search_catalog)
         search_row.addWidget(self.search, 1)
         self.search_kind = QComboBox()
         self.search_kind.addItem("Songs", "song")
         self.search_kind.addItem("Albums", "album")
+        self.search_kind.addItem("Artists", "musicArtist")
         self.search_kind.setCurrentIndex(1)
         self.search_kind.currentIndexChanged.connect(self.invalidate_search)
         search_row.addWidget(self.search_kind)
@@ -343,6 +354,17 @@ class Window(QMainWindow):
         if index == 0:
             self.refresh_releases()
 
+    def open_artist(self, artist):
+        self.country.setText(artist.country)
+        self.pages.setCurrentIndex(1)
+        self.request_catalog(
+            self.catalog.artist_albums,
+            artist.id,
+            artist.country,
+            result_kind="artist_albums",
+            artist_name=artist.title,
+        )
+
     def open_album(self, album):
         if not album:
             return
@@ -360,7 +382,9 @@ class Window(QMainWindow):
             return
         if 0 <= row < len(self.results):
             item = self.results[row]
-            album = item if isinstance(item, Album) else item.album
+            album = (
+                item if isinstance(item, Album) else item.album if isinstance(item, Track) else None
+            )
             if album:
                 self.badge_context = album
                 self.detail_card = AlbumCard(album, self.artwork, self.open_album)
@@ -397,7 +421,8 @@ class Window(QMainWindow):
             if self.detail_card:
                 candidates.append(self.detail_card.album)
             candidates.extend(
-                item if isinstance(item, Album) else item.album for item in self.results
+                item if isinstance(item, Album) else item.album if isinstance(item, Track) else None
+                for item in self.results
             )
         if self.now_card:
             candidates.append(self.now_card.album)
@@ -423,12 +448,15 @@ class Window(QMainWindow):
                 pass  # Album track rows deliberately have no repeated cover artwork.
             elif badge_ready:
                 for index, item in enumerate(self.results):
+                    if isinstance(item, Artist):
+                        continue
                     image = self.artwork.get(item.artwork_url)
                     if not image.isNull() and index < self.result_list.count():
                         self.result_list.item(index).setIcon(QIcon(QPixmap.fromImage(image)))
             else:
                 for index in range(self.result_list.count()):
-                    self.result_list.item(index).setIcon(placeholder())
+                    if not isinstance(self.results[index], Artist):
+                        self.result_list.item(index).setIcon(placeholder())
         if self.now_card:
             self.now_card.refresh()
 
@@ -556,7 +584,7 @@ class Window(QMainWindow):
             )
 
     def copy_search_diagnostics(self):
-        if not self.last_search_diagnostics:
+        if not self.last_search_diagnostics and not self.last_artist_diagnostics:
             return
         report = {
             "schema": "apple-music-player-search-v1",
@@ -565,10 +593,17 @@ class Window(QMainWindow):
                 "storefront": public_text(self.country.text(), 2),
                 "entity": self.search_kind.currentData(),
             },
-            "currently_displaying_this_search": self.displayed_search_diagnostics
-            is self.last_search_diagnostics,
+            "currently_displaying_this_search": bool(
+                self.last_search_diagnostics
+                and self.displayed_search_diagnostics is self.last_search_diagnostics
+            ),
             "catalog_request_pending": bool(self.catalog_future or self.catalog_timer.isActive()),
             "last_completed_search": self.last_search_diagnostics,
+            "last_artist_album_lookup": self.last_artist_diagnostics,
+            "currently_displaying_artist_albums": bool(
+                self.last_artist_diagnostics
+                and self.displayed_artist_diagnostics is self.last_artist_diagnostics
+            ),
         }
         QApplication.clipboard().setText(json.dumps(report, ensure_ascii=False, indent=2))
 
@@ -584,15 +619,19 @@ class Window(QMainWindow):
         if clear:
             self.results = []
             self.displayed_search_diagnostics = None
+            self.displayed_artist_diagnostics = None
             self.show_album_header()
             self.result_list.clear()
             self.selected_button.setEnabled(False)
             self.all_button.setEnabled(False)
 
-    def request_catalog(self, operation, *args, result_kind="songs", album_title=""):
+    def request_catalog(
+        self, operation, *args, result_kind="songs", album_title="", artist_name=""
+    ):
         self.invalidate_search()
         self.pending_result_kind = result_kind
         self.pending_album_title = album_title
+        self.pending_artist_name = artist_name
         self.catalog_request = (operation, args)
         self.catalog_retries = 0
         self.resume_catalog()
@@ -613,7 +652,9 @@ class Window(QMainWindow):
                 self.search.text(),
                 self.country.text().lower(),
                 self.search_kind.currentData(),
-                result_kind="albums" if self.search_kind.currentData() == "album" else "songs",
+                result_kind={"album": "albums", "song": "songs", "musicArtist": "artists"}[
+                    self.search_kind.currentData()
+                ],
             )
 
     def remember_storefront(self):
@@ -663,6 +704,9 @@ class Window(QMainWindow):
         row = self.result_list.currentRow()
         if 0 <= row < len(self.results):
             item = self.results[row]
+            if isinstance(item, Artist):
+                self.open_artist(item)
+                return
             album_id = item.id if isinstance(item, Album) else item.album_id
             if album_id:
                 self.open_album(item if isinstance(item, Album) else item.album)
@@ -670,7 +714,9 @@ class Window(QMainWindow):
     def add_selected(self):
         row = self.result_list.currentRow()
         if 0 <= row < len(self.results):
-            if isinstance(self.results[row], Album):
+            if isinstance(self.results[row], Artist):
+                self.open_artist(self.results[row])
+            elif isinstance(self.results[row], Album):
                 self.browse_album()
             else:
                 self.controller.add(self.results[row], self.quality.currentData())
@@ -820,6 +866,11 @@ class Window(QMainWindow):
                     if result is not None:
                         self.results = result
                         self.displayed_search_diagnostics = None
+                        self.displayed_artist_diagnostics = None
+                        if isinstance(result, ArtistAlbums):
+                            self.last_artist_diagnostics = result.diagnostics
+                            self.displayed_artist_diagnostics = result.diagnostics
+                            self.copy_search_button.setEnabled(True)
                         if isinstance(result, SearchResults):
                             self.last_search_diagnostics = result.diagnostics
                             self.displayed_search_diagnostics = result.diagnostics
@@ -846,22 +897,43 @@ class Window(QMainWindow):
                                 )
                                 item.setSizeHint(QSize(0, 30))
                         else:
-                            self.result_list.addItems([track.title for track in self.results])
-                            for index in range(self.result_list.count()):
-                                self.result_list.item(index).setIcon(placeholder())
+                            self.result_list.addItems(
+                                [
+                                    item.title
+                                    + (
+                                        " · " + item.genre
+                                        if isinstance(item, Artist) and item.genre
+                                        else ""
+                                    )
+                                    for item in self.results
+                                ]
+                            )
+                            for index, item in enumerate(self.results):
+                                if not isinstance(item, Artist):
+                                    self.result_list.item(index).setIcon(placeholder())
                         if self.results:
                             self.result_list.setCurrentRow(0)
-                        albums = self.pending_result_kind == "albums"
-                        self.selected_button.setText("Open album" if albums else "Queue selected")
+                        albums = self.pending_result_kind in {"albums", "artist_albums"}
+                        artists = self.pending_result_kind == "artists"
+                        self.browse_button.setVisible(not artists and not self.album_header.album)
+                        self.selected_button.setText(
+                            "Open artist"
+                            if artists
+                            else "Open album"
+                            if albums
+                            else "Queue selected"
+                        )
                         self.selected_button.setEnabled(bool(self.results))
                         self.all_button.setText(
                             "Queue album" if self.pending_album_title else "Queue all results"
                         )
-                        self.all_button.setEnabled(bool(self.results) and not albums)
-                        label = "albums" if albums else "songs"
+                        self.all_button.setEnabled(
+                            bool(self.results) and not albums and not artists
+                        )
+                        label = "artists" if artists else "albums" if albums else "songs"
                         if len(self.results) == 1:
                             label = label[:-1]
-                        action = "open album" if albums else "queue"
+                        action = "open artist" if artists else "open album" if albums else "queue"
                         context = "" if self.album_header.album else self.pending_album_title
                         self.catalog_status.setText(
                             (
@@ -876,6 +948,13 @@ class Window(QMainWindow):
                                 else "try another query/storefront or paste an Apple Music URL"
                             )
                         )
+                        if self.pending_result_kind == "artist_albums":
+                            self.catalog_status.setText(
+                                self.pending_artist_name
+                                + " · "
+                                + self.catalog_status.text()
+                                + " · limited public catalog; may omit albums"
+                            )
                         if isinstance(result, SearchResults):
                             self.catalog_status.setText(
                                 f"Results for “{result.diagnostics['query']}” · "

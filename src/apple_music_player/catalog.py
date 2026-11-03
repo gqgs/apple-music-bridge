@@ -9,7 +9,7 @@ from urllib.error import HTTPError
 from urllib.parse import urlencode
 from urllib.request import urlopen
 
-from .model import Album, PlayerError, Track
+from .model import Album, Artist, PlayerError, Track
 
 
 class CatalogDeferred(Exception):
@@ -19,6 +19,12 @@ class CatalogDeferred(Exception):
 
 
 class SearchResults(list):
+    def __init__(self, values, diagnostics):
+        super().__init__(values)
+        self.diagnostics = diagnostics
+
+
+class ArtistAlbums(list):
     def __init__(self, values, diagnostics):
         super().__init__(values)
         self.diagnostics = diagnostics
@@ -34,10 +40,17 @@ def public_result(row):
     # Strict public-metadata allowlist; never retain arbitrary response fields/URLs.
     if not isinstance(row, dict):
         return {"type": "invalid row"}
-    identifier = str(row.get("trackId", row.get("collectionId", "")))
+    artist = row.get("wrapperType") == "artist"
+    identifier = str(
+        row.get("artistId", "") if artist else row.get("trackId", row.get("collectionId", ""))
+    )
     return {
         "id": identifier if re.fullmatch(r"[0-9]{1,30}", identifier) else "",
-        "title": public_text(row.get("trackName", row.get("collectionName", ""))),
+        "title": public_text(
+            row.get("artistName", "")
+            if artist
+            else row.get("trackName", row.get("collectionName", ""))
+        ),
         "artist": public_text(row.get("artistName", "")),
         "wrapper_type": public_text(row.get("wrapperType", ""), 40),
         "kind": public_text(row.get("kind", row.get("collectionType", "")), 40),
@@ -169,20 +182,37 @@ class Catalog:
             )
         }
 
+    def artists(self, rows, country):
+        return [
+            Artist(
+                country,
+                str(row["artistId"]),
+                public_text(row["artistName"]),
+                public_text(row.get("primaryGenreName", "")),
+            )
+            for row in rows
+            if isinstance(row, dict)
+            and row.get("wrapperType") == "artist"
+            and re.fullmatch(r"[0-9]+", str(row.get("artistId", "")))
+            and public_text(row.get("artistName", ""))
+        ]
+
     def artist_albums(self, artist_id, country):
         if not re.fullmatch(r"[0-9]+", artist_id) or not re.fullmatch(r"[a-z]{2}", country):
             return []
-        return self.albums(
-            self.request("lookup", id=artist_id, country=country, entity="album", limit=200),
-            country,
-        )
+        params = dict(id=artist_id, country=country, entity="album", limit=200)
+        rows = self.request("lookup", **params)
+        albums = self.albums(rows, country)
+        diagnostics = self.diagnostics("lookup", params, rows, albums)
+        diagnostics["artist_id"] = artist_id
+        return ArtistAlbums(albums, diagnostics)
 
     def search(self, query, country, entity="song"):
         if not re.fullmatch("[a-z]{2}", country):
             raise PlayerError("Storefront must be a two-letter country code, e.g. us.")
-        if entity not in {"song", "album"}:
-            raise PlayerError("Choose Songs or Albums.")
-        parse = self.albums if entity == "album" else self.tracks
+        if entity not in {"song", "album", "musicArtist"}:
+            raise PlayerError("Choose Songs, Albums or Artists.")
+        parse = {"album": self.albums, "song": self.tracks, "musicArtist": self.artists}[entity]
         params = dict(
             term=query[:200],
             country=country,
@@ -190,16 +220,19 @@ class Catalog:
             entity=entity,
             limit=200 if entity == "album" else 50,
         )
-        key = "search?" + urlencode(params)
         rows = self.request("search", **params)
         accepted = parse(rows, country)
+        return SearchResults(accepted, self.diagnostics("search", params, rows, accepted))
+
+    def diagnostics(self, endpoint, params, rows, accepted):
+        key = endpoint + "?" + urlencode(params)
         source = self.last_response_source
-        diagnostics = {
-            "endpoint": "https://itunes.apple.com/search",
-            "query": public_text(params["term"], 200),
-            "storefront": country,
-            "media": "music",
-            "entity": entity,
+        return {
+            "endpoint": "https://itunes.apple.com/" + endpoint,
+            "query": public_text(params.get("term", ""), 200),
+            "storefront": params["country"],
+            "media": params.get("media", ""),
+            "entity": params["entity"],
             "limit": params["limit"],
             "source": source[1] if source and source[0] == key else "adapter (source unavailable)",
             "raw_result_count": len(rows),
@@ -211,7 +244,6 @@ class Catalog:
                 for item in accepted[:200]
             ],
         }
-        return SearchResults(accepted, diagnostics)
 
     def album(self, album_id, country):
         rows = self.request("lookup", id=album_id, country=country, entity="song", limit=200)

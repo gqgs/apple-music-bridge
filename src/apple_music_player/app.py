@@ -1039,7 +1039,7 @@ class Window(QMainWindow):
                 self.pending_artist_name
                 + " · "
                 + self.catalog_status.text()
-                + " · Approximate groups; unmarked releases are in Albums"
+                + " · Approximate neural groups; unmarked releases are in Albums"
             )
         if isinstance(result, SearchResults):
             self.catalog_status.setText(

@@ -1,0 +1,404 @@
+{
+  "source_kind": "Manual transcription of release facts and artist-page section membership",
+  "selection": "All visible entries in Albums, Singles & EPs, Live Albums and Compilations on the two artist landing pages; no See All expansion. Deduplicate repeated title within artist. Exclude Top Songs, Essential Albums, Appears On, videos and playlists.",
+  "limitations": "US public web snapshots, not BR iTunes API results. Page sections can overlap or contradict ordinary release-type semantics. These are observed membership labels, not independently adjudicated editorial ground truth. Source fetches used cached web representations (Björk: 3 days old; Faye: last week). No Others examples appear. Artist-page inclusion does not prove sole primary artist credit.",
+  "rows": [
+    {
+      "artist": "Björk",
+      "title": "Cornucopia Live",
+      "display_year": 2025,
+      "country": "us",
+      "source_url": "https://music.apple.com/us/artist/bj%C3%B6rk/295015",
+      "observed_sections": [
+        "Albums"
+      ],
+      "observed_on": "2026-11-03"
+    },
+    {
+      "artist": "Björk",
+      "title": "Mount Wittenberg Orca (Expanded Edition)",
+      "display_year": 2023,
+      "country": "us",
+      "source_url": "https://music.apple.com/us/artist/bj%C3%B6rk/295015",
+      "observed_sections": [
+        "Albums",
+        "Compilations"
+      ],
+      "observed_on": "2026-11-03"
+    },
+    {
+      "artist": "Björk",
+      "title": "Fossora",
+      "display_year": 2022,
+      "country": "us",
+      "source_url": "https://music.apple.com/us/artist/bj%C3%B6rk/295015",
+      "observed_sections": [
+        "Albums"
+      ],
+      "observed_on": "2026-11-03"
+    },
+    {
+      "artist": "Björk",
+      "title": "Utopia",
+      "display_year": 2017,
+      "country": "us",
+      "source_url": "https://music.apple.com/us/artist/bj%C3%B6rk/295015",
+      "observed_sections": [
+        "Albums"
+      ],
+      "observed_on": "2026-11-03"
+    },
+    {
+      "artist": "Björk",
+      "title": "Vulnicura Strings (The Acoustic Version: Strings, Voice and Viola Organista Only)",
+      "display_year": 2015,
+      "country": "us",
+      "source_url": "https://music.apple.com/us/artist/bj%C3%B6rk/295015",
+      "observed_sections": [
+        "Albums"
+      ],
+      "observed_on": "2026-11-03"
+    },
+    {
+      "artist": "Björk",
+      "title": "Vulnicura",
+      "display_year": 2015,
+      "country": "us",
+      "source_url": "https://music.apple.com/us/artist/bj%C3%B6rk/295015",
+      "observed_sections": [
+        "Albums"
+      ],
+      "observed_on": "2026-11-03"
+    },
+    {
+      "artist": "Björk",
+      "title": "Biophilia (Deluxe Edition)",
+      "display_year": 2011,
+      "country": "us",
+      "source_url": "https://music.apple.com/us/artist/bj%C3%B6rk/295015",
+      "observed_sections": [
+        "Albums"
+      ],
+      "observed_on": "2026-11-03"
+    },
+    {
+      "artist": "Björk",
+      "title": "Where Is the Line (Live at Harpa Hall, Reykjavík) - Single",
+      "display_year": 2026,
+      "country": "us",
+      "source_url": "https://music.apple.com/us/artist/bj%C3%B6rk/295015",
+      "observed_sections": [
+        "Singles & EPs"
+      ],
+      "observed_on": "2026-11-03"
+    },
+    {
+      "artist": "Björk",
+      "title": "Berghain (Remix) - Single",
+      "display_year": 2026,
+      "country": "us",
+      "source_url": "https://music.apple.com/us/artist/bj%C3%B6rk/295015",
+      "observed_sections": [
+        "Singles & EPs"
+      ],
+      "observed_on": "2026-11-03"
+    },
+    {
+      "artist": "Björk",
+      "title": "Oral (feat. ROSALÍA) [Olof Dreijer Remix] - Single",
+      "display_year": 2024,
+      "country": "us",
+      "source_url": "https://music.apple.com/us/artist/bj%C3%B6rk/295015",
+      "observed_sections": [
+        "Singles & EPs"
+      ],
+      "observed_on": "2026-11-03"
+    },
+    {
+      "artist": "Björk",
+      "title": "Oral - Single",
+      "display_year": 2023,
+      "country": "us",
+      "source_url": "https://music.apple.com/us/artist/bj%C3%B6rk/295015",
+      "observed_sections": [
+        "Singles & EPs"
+      ],
+      "observed_on": "2026-11-03"
+    },
+    {
+      "artist": "Björk",
+      "title": "On and Ever Onward (Live from Housing Works 2009) [Live]",
+      "display_year": 2023,
+      "country": "us",
+      "source_url": "https://music.apple.com/us/artist/bj%C3%B6rk/295015",
+      "observed_sections": [
+        "Singles & EPs"
+      ],
+      "observed_on": "2026-11-03"
+    },
+    {
+      "artist": "Björk",
+      "title": "Ovule (feat. Shygirl) [Sega Bodega Remix] - Single",
+      "display_year": 2023,
+      "country": "us",
+      "source_url": "https://music.apple.com/us/artist/bj%C3%B6rk/295015",
+      "observed_sections": [
+        "Singles & EPs"
+      ],
+      "observed_on": "2026-11-03"
+    },
+    {
+      "artist": "Björk",
+      "title": "Atopos - Single",
+      "display_year": 2022,
+      "country": "us",
+      "source_url": "https://music.apple.com/us/artist/bj%C3%B6rk/295015",
+      "observed_sections": [
+        "Singles & EPs"
+      ],
+      "observed_on": "2026-11-03"
+    },
+    {
+      "artist": "Björk",
+      "title": "Björk Orkestral with the Hamrahlíð Choir (Live at Harpa Hall, Reykjavík)",
+      "display_year": 2026,
+      "country": "us",
+      "source_url": "https://music.apple.com/us/artist/bj%C3%B6rk/295015",
+      "observed_sections": [
+        "Live Albums"
+      ],
+      "observed_on": "2026-11-03"
+    },
+    {
+      "artist": "Björk",
+      "title": "Apple Music Live: Björk (Cornucopia)",
+      "display_year": 2025,
+      "country": "us",
+      "source_url": "https://music.apple.com/us/artist/bj%C3%B6rk/295015",
+      "observed_sections": [
+        "Live Albums"
+      ],
+      "observed_on": "2026-11-03"
+    },
+    {
+      "artist": "Björk",
+      "title": "Vulnicura (Live)",
+      "display_year": 2015,
+      "country": "us",
+      "source_url": "https://music.apple.com/us/artist/bj%C3%B6rk/295015",
+      "observed_sections": [
+        "Live Albums"
+      ],
+      "observed_on": "2026-11-03"
+    },
+    {
+      "artist": "Björk",
+      "title": "Biophilia (Live)",
+      "display_year": 2014,
+      "country": "us",
+      "source_url": "https://music.apple.com/us/artist/bj%C3%B6rk/295015",
+      "observed_sections": [
+        "Live Albums"
+      ],
+      "observed_on": "2026-11-03"
+    },
+    {
+      "artist": "Björk",
+      "title": "Vespertine (Live)",
+      "display_year": 2003,
+      "country": "us",
+      "source_url": "https://music.apple.com/us/artist/bj%C3%B6rk/295015",
+      "observed_sections": [
+        "Live Albums"
+      ],
+      "observed_on": "2026-11-03"
+    },
+    {
+      "artist": "Björk",
+      "title": "Homogenic (Live)",
+      "display_year": 1997,
+      "country": "us",
+      "source_url": "https://music.apple.com/us/artist/bj%C3%B6rk/295015",
+      "observed_sections": [
+        "Live Albums"
+      ],
+      "observed_on": "2026-11-03"
+    },
+    {
+      "artist": "Björk",
+      "title": "Post (Live)",
+      "display_year": 1995,
+      "country": "us",
+      "source_url": "https://music.apple.com/us/artist/bj%C3%B6rk/295015",
+      "observed_sections": [
+        "Live Albums"
+      ],
+      "observed_on": "2026-11-03"
+    },
+    {
+      "artist": "Björk",
+      "title": "Apple Music Live: NYE 2025 (DJ Mix)",
+      "display_year": 2024,
+      "country": "us",
+      "source_url": "https://music.apple.com/us/artist/bj%C3%B6rk/295015",
+      "observed_sections": [
+        "Compilations"
+      ],
+      "observed_on": "2026-11-03"
+    },
+    {
+      "artist": "Björk",
+      "title": "Bastards",
+      "display_year": 2012,
+      "country": "us",
+      "source_url": "https://music.apple.com/us/artist/bj%C3%B6rk/295015",
+      "observed_sections": [
+        "Compilations"
+      ],
+      "observed_on": "2026-11-03"
+    },
+    {
+      "artist": "Björk",
+      "title": "Moon - Single",
+      "display_year": 2011,
+      "country": "us",
+      "source_url": "https://music.apple.com/us/artist/bj%C3%B6rk/295015",
+      "observed_sections": [
+        "Compilations"
+      ],
+      "observed_on": "2026-11-03"
+    },
+    {
+      "artist": "Björk",
+      "title": "Virus - Single",
+      "display_year": 2011,
+      "country": "us",
+      "source_url": "https://music.apple.com/us/artist/bj%C3%B6rk/295015",
+      "observed_sections": [
+        "Compilations"
+      ],
+      "observed_on": "2026-11-03"
+    },
+    {
+      "artist": "Björk",
+      "title": "The Comet Song - Single",
+      "display_year": 2010,
+      "country": "us",
+      "source_url": "https://music.apple.com/us/artist/bj%C3%B6rk/295015",
+      "observed_sections": [
+        "Compilations"
+      ],
+      "observed_on": "2026-11-03"
+    },
+    {
+      "artist": "Björk",
+      "title": "Voltaic",
+      "display_year": 2009,
+      "country": "us",
+      "source_url": "https://music.apple.com/us/artist/bj%C3%B6rk/295015",
+      "observed_sections": [
+        "Compilations"
+      ],
+      "observed_on": "2026-11-03"
+    },
+    {
+      "artist": "Faye Webster",
+      "title": "Underdressed at the Symphony",
+      "display_year": 2024,
+      "country": "us",
+      "source_url": "https://music.apple.com/us/artist/faye-webster/532412540",
+      "observed_sections": [
+        "Albums"
+      ],
+      "observed_on": "2026-11-03"
+    },
+    {
+      "artist": "Faye Webster",
+      "title": "I Know I'm Funny haha",
+      "display_year": 2021,
+      "country": "us",
+      "source_url": "https://music.apple.com/us/artist/faye-webster/532412540",
+      "observed_sections": [
+        "Albums"
+      ],
+      "observed_on": "2026-11-03"
+    },
+    {
+      "artist": "Faye Webster",
+      "title": "Atlanta Millionaires Club",
+      "display_year": 2019,
+      "country": "us",
+      "source_url": "https://music.apple.com/us/artist/faye-webster/532412540",
+      "observed_sections": [
+        "Albums"
+      ],
+      "observed_on": "2026-11-03"
+    },
+    {
+      "artist": "Faye Webster",
+      "title": "Faye Webster",
+      "display_year": 2017,
+      "country": "us",
+      "source_url": "https://music.apple.com/us/artist/faye-webster/532412540",
+      "observed_sections": [
+        "Albums"
+      ],
+      "observed_on": "2026-11-03"
+    },
+    {
+      "artist": "Faye Webster",
+      "title": "Run and Tell",
+      "display_year": 2013,
+      "country": "us",
+      "source_url": "https://music.apple.com/us/artist/faye-webster/532412540",
+      "observed_sections": [
+        "Albums"
+      ],
+      "observed_on": "2026-11-03"
+    },
+    {
+      "artist": "Faye Webster",
+      "title": "I CARE (FAYE WEBSTER VERSION) - Single",
+      "display_year": 2026,
+      "country": "us",
+      "source_url": "https://music.apple.com/us/artist/faye-webster/532412540",
+      "observed_sections": [
+        "Singles & EPs"
+      ],
+      "observed_on": "2026-11-03"
+    },
+    {
+      "artist": "Faye Webster",
+      "title": "Make 'em Laugh - Single",
+      "display_year": 2024,
+      "country": "us",
+      "source_url": "https://music.apple.com/us/artist/faye-webster/532412540",
+      "observed_sections": [
+        "Singles & EPs"
+      ],
+      "observed_on": "2026-11-03"
+    },
+    {
+      "artist": "Faye Webster",
+      "title": "After the First Kiss - Single",
+      "display_year": 2024,
+      "country": "us",
+      "source_url": "https://music.apple.com/us/artist/faye-webster/532412540",
+      "observed_sections": [
+        "Singles & EPs"
+      ],
+      "observed_on": "2026-11-03"
+    },
+    {
+      "artist": "Faye Webster",
+      "title": "Car Therapy Sessions - EP",
+      "display_year": 2022,
+      "country": "us",
+      "source_url": "https://music.apple.com/us/artist/faye-webster/532412540",
+      "observed_sections": [
+        "Singles & EPs"
+      ],
+      "observed_on": "2026-11-03"
+    }
+  ]
+}

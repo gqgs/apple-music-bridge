@@ -34,7 +34,7 @@ def test_release_classification_dates_and_deterministic_ties():
         ("Others", ["7"]),
     ]
     assert grouped_releases(list(reversed(releases))) == groups
-    assert release_group(album("11", "EP Stories")) == "Albums"
+    assert release_group(album("11", "EP Stories")) == "Singles & EPs"
     assert release_group(album("12", "Série - EP")) == "Singles & EPs"
     assert release_group(album("13", "Édition - Single")) == "Singles & EPs"
     # No unverified localization / track-count heuristics.
@@ -162,19 +162,22 @@ def test_bjork_title_hints_and_ambiguous_names():
         "Björk's Greatest Hits": "Compilations",
         "Fossora": "Albums",
         "Bastards": "Albums",  # No title hint: approximate Albums fallback.
-        "Cornucopia Live": "Albums",  # Bare word 'Live' is ambiguous; use Albums fallback.
+        "Cornucopia Live": "Live Albums",
     }
     for title, group in expected.items():
         assert release_group(album("1", title)) == group
-    for title in (
-        "Olive",
-        "Live Forever",
-        "I Live",
-        "The Best of Me",
-        "Single Minded",
-        "EP Stories",
-    ):
-        assert release_group(album("1", title)) == "Albums"
+    # Broad lexical cues can be false positives; these document the frozen network,
+    # not asserted editorial truth for arbitrary titles.
+    for title, group in {
+        "Olive": "Albums",
+        "Live Forever": "Live Albums",
+        "I Live": "Live Albums",
+        "The Best of Me": "Compilations",
+        "Single Minded": "Singles & EPs",
+        "EP Stories": "Singles & EPs",
+        "Record Remixes": "Others",
+    }.items():
+        assert release_group(album("1", title)) == group
     for title in ("Show (Ao Vivo)", "Show - En Vivo", "Live at the Hall"):
         assert release_group(album("1", title)) == "Live Albums"
     assert release_group(album("1", "Show (Live) - Single")) == "Singles & EPs"

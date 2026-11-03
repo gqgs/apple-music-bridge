@@ -1,0 +1,136 @@
+{
+  "context": {
+    "python": "3.12.14",
+    "implementation": "CPython",
+    "os": "Linux",
+    "kernel": "6.18.57",
+    "architecture": "x86_64",
+    "cpu_model": "AMD EPYC 9V74 80-Core Processor",
+    "visible_logical_cpus": 5,
+    "gc_enabled": true,
+    "timer": "perf_counter_ns",
+    "repeats": 9,
+    "loops_per_sample": 50,
+    "warmup_batches": 5
+  },
+  "method": "Single process/thread, alternating measurement order, warm regex caches; includes title normalization/features and output list allocation; excludes imports, fixture parsing, Album construction, network, artwork, Qt and playback. Shared cloud VM, no CPU pinning. Batches cycle 36 real titles; not 200 unique releases.",
+  "batches": [
+    {
+      "size": 10,
+      "timings": {
+        "heuristic": {
+          "median_ms_per_batch": 0.036802480000000005,
+          "min_ms_per_batch": 0.032614779999999996,
+          "max_ms_per_batch": 0.051620559999999996,
+          "median_us_per_release": 3.680248,
+          "samples_ms_per_batch": [
+            0.0326262,
+            0.051620559999999996,
+            0.0377393,
+            0.03661242,
+            0.03350574,
+            0.036802480000000005,
+            0.032614779999999996,
+            0.03964936,
+            0.040762440000000004
+          ]
+        },
+        "candidate": {
+          "median_ms_per_batch": 0.16555072,
+          "min_ms_per_batch": 0.14513884,
+          "max_ms_per_batch": 0.3033369,
+          "median_us_per_release": 16.555072000000003,
+          "samples_ms_per_batch": [
+            0.15180968,
+            0.20582102,
+            0.16555072,
+            0.17647492,
+            0.1463014,
+            0.3033369,
+            0.14513884,
+            0.1489722,
+            0.17423738
+          ]
+        }
+      }
+    },
+    {
+      "size": 50,
+      "timings": {
+        "heuristic": {
+          "median_ms_per_batch": 0.1572272,
+          "min_ms_per_batch": 0.14114884,
+          "max_ms_per_batch": 0.201816,
+          "median_us_per_release": 3.1445440000000002,
+          "samples_ms_per_batch": [
+            0.201816,
+            0.20169302,
+            0.18559922,
+            0.14647706,
+            0.15653678,
+            0.14114884,
+            0.1572272,
+            0.19003208,
+            0.15604601999999998
+          ]
+        },
+        "candidate": {
+          "median_ms_per_batch": 0.78490178,
+          "min_ms_per_batch": 0.70101976,
+          "max_ms_per_batch": 0.95749308,
+          "median_us_per_release": 15.6980356,
+          "samples_ms_per_batch": [
+            0.80649464,
+            0.79575868,
+            0.78490178,
+            0.95749308,
+            0.7612104000000001,
+            0.70101976,
+            0.8544827199999999,
+            0.7426250600000001,
+            0.78169778
+          ]
+        }
+      }
+    },
+    {
+      "size": 200,
+      "timings": {
+        "heuristic": {
+          "median_ms_per_batch": 0.6464608000000001,
+          "min_ms_per_batch": 0.59701492,
+          "max_ms_per_batch": 0.68365768,
+          "median_us_per_release": 3.2323040000000005,
+          "samples_ms_per_batch": [
+            0.6622741600000001,
+            0.61058772,
+            0.59701492,
+            0.68365768,
+            0.61212202,
+            0.66434406,
+            0.6464608000000001,
+            0.64949416,
+            0.6318518599999999
+          ]
+        },
+        "candidate": {
+          "median_ms_per_batch": 3.21596106,
+          "min_ms_per_batch": 2.98977886,
+          "max_ms_per_batch": 3.3112740400000003,
+          "median_us_per_release": 16.0798053,
+          "samples_ms_per_batch": [
+            3.2768721800000002,
+            3.22945472,
+            3.14908258,
+            2.98977886,
+            3.0752583,
+            3.1348358,
+            3.2625718999999997,
+            3.21596106,
+            3.3112740400000003
+          ]
+        }
+      }
+    }
+  ]
+}

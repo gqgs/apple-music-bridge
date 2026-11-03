@@ -1,0 +1,5 @@
+extend = "../../pyproject.toml"
+
+[lint.per-file-ignores]
+# Adjacent-token zip intentionally truncates. Keep pre-evaluation frozen bytes intact.
+"candidate.py" = ["B905"]

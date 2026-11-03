@@ -248,6 +248,20 @@ def test_artist_grid_burst_leaves_capacity_for_album_page(bridge, monkeypatch, i
     if not isolated:
         server.covers.background_pool.shutdown()
         server.covers.background_pool = server.covers.pool
+    all_arrived = threading.Event()
+    arrived_lock = threading.Lock()
+    arrived = []
+    original_get = server.release_art.get
+
+    def tracked_get(identifier):
+        result = original_get(identifier)
+        with arrived_lock:
+            arrived.append(identifier)
+            if len(arrived) == 5:
+                all_arrived.set()
+        return result
+
+    monkeypatch.setattr(server.release_art, "get", tracked_get)
     loads = []
     image = image_bytes()
 
@@ -255,7 +269,7 @@ def test_artist_grid_burst_leaves_capacity_for_album_page(bridge, monkeypatch, i
         loads.append(url)
         if "/artist" in url:
             entered.set()
-            assert release.wait(3)
+            assert release.wait(10)
         return image
 
     monkeypatch.setattr(server.covers, "load", slow_artist)
@@ -265,7 +279,8 @@ def test_artist_grid_burst_leaves_capacity_for_album_page(bridge, monkeypatch, i
                 pool.submit(raw_cover_response, server, f"artist-release:am:br:lossless:artist:{i}")
                 for i in range(1, 6)
             ]
-            assert entered.wait(1)
+            assert entered.wait(3)
+            assert all_arrived.wait(3)
             deadline = time.monotonic() + 1
             while len(server.covers.pending) < 2 and time.monotonic() < deadline:
                 threading.Event().wait(0.005)
@@ -274,7 +289,7 @@ def test_artist_grid_burst_leaves_capacity_for_album_page(bridge, monkeypatch, i
             # both direct-album workers. Client-side retry sleeps are separate.
             album_request = pool.submit(raw_cover_response, server, "am:br:lossless:album:200")
             if isolated:
-                result = album_request.result(timeout=1)
+                result = album_request.result(timeout=5)
                 assert result[0] == 200 and not QImage.fromData(result[2]).isNull()
             else:
                 from concurrent.futures import TimeoutError

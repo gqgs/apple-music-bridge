@@ -29,11 +29,12 @@ def test_release_classification_dates_and_deterministic_ties():
     ]
     groups = grouped_releases(releases)
     assert [(name, [a.id for a in values]) for name, values in groups] == [
+        ("Albums", ["2", "8", "9", "1", "10", "3"]),
         ("Singles & EPs", ["6", "5", "4"]),
-        ("Others", ["2", "8", "9", "1", "7", "10", "3"]),
+        ("Others", ["7"]),
     ]
     assert grouped_releases(list(reversed(releases))) == groups
-    assert release_group(album("11", "EP Stories")) == "Others"
+    assert release_group(album("11", "EP Stories")) == "Albums"
     assert release_group(album("12", "Série - EP")) == "Singles & EPs"
     assert release_group(album("13", "Édition - Single")) == "Singles & EPs"
     # No unverified localization / track-count heuristics.
@@ -159,9 +160,9 @@ def test_bjork_title_hints_and_ambiguous_names():
         "Big Time Sensuality (UK CD1 Single)": "Singles & EPs",
         "Vulnicura (Live)": "Live Albums",
         "Björk's Greatest Hits": "Compilations",
-        "Fossora": "Others",
-        "Bastards": "Others",  # No title hint; do not silently infer a compilation.
-        "Cornucopia Live": "Others",  # Bare word 'Live' is ambiguous without a marker.
+        "Fossora": "Albums",
+        "Bastards": "Albums",  # No title hint: approximate Albums fallback.
+        "Cornucopia Live": "Albums",  # Bare word 'Live' is ambiguous; use Albums fallback.
     }
     for title, group in expected.items():
         assert release_group(album("1", title)) == group
@@ -173,7 +174,7 @@ def test_bjork_title_hints_and_ambiguous_names():
         "Single Minded",
         "EP Stories",
     ):
-        assert release_group(album("1", title)) == "Others"
+        assert release_group(album("1", title)) == "Albums"
     for title in ("Show (Ao Vivo)", "Show - En Vivo", "Live at the Hall"):
         assert release_group(album("1", title)) == "Live Albums"
     assert release_group(album("1", "Show (Live) - Single")) == "Singles & EPs"
@@ -182,7 +183,7 @@ def test_bjork_title_hints_and_ambiguous_names():
     assert release_group(album("1", "Record (Studio Album)")) == "Albums"
     groups = grouped_releases(
         [
-            album("1", "Other"),
+            album("1", ""),
             album("2", "Coletânea"),
             album("3", "Show (Live)"),
             album("4", "Short - EP"),

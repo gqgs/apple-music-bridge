@@ -138,6 +138,9 @@ class Window(QMainWindow):
         self.pending_result_kind = "songs"
         self.pending_album_title = ""
         self.pending_artist_name = ""
+        self.view_history = []
+        self.detail_navigation_pending = False
+        self.displayed_catalog_context = ("songs", "", "")
         self.rendered_queue = None
         outer = QWidget()
         self.setCentralWidget(outer)
@@ -145,6 +148,11 @@ class Window(QMainWindow):
         title_row = QHBoxLayout()
         title = QLabel("Apple Music Player")
         title.setStyleSheet("font-size: 24px; font-weight: 600")
+        self.back_button = self.button(title_row, "← Back", self.go_back)
+        self.back_button.setShortcut("Alt+Left")
+        self.back_button.setAccessibleName("Back to previous view")
+        self.back_button.setToolTip("Return to the previous view (Alt+Left)")
+        self.back_button.setEnabled(False)
         title_row.addWidget(title)
         title_row.addStretch()
         self.button(title_row, "Backend setup", self.backend_setup)
@@ -361,7 +369,83 @@ class Window(QMainWindow):
         if index == 0:
             self.refresh_releases()
 
+    def remember_view(self):
+        if self.detail_navigation_pending:
+            return  # Repeated clicks while loading share the same return destination.
+        page = self.pages.currentIndex()
+        scroll = self.pages.widget(page)
+        self.view_history.append(
+            {
+                "page": page,
+                "query": self.search.text(),
+                "country": self.country.text(),
+                "mode": self.search_kind.currentData(),
+                "result": self.results,
+                "context": self.displayed_catalog_context,
+                "row": self.result_list.currentRow(),
+                "list_scroll": self.result_list.verticalScrollBar().value(),
+                "page_scroll": scroll.verticalScrollBar().value()
+                if isinstance(scroll, QScrollArea)
+                else 0,
+                "status": (
+                    ("Previous results · press Search to update" if self.results else SEARCH_IDLE)
+                    if self.catalog_future or self.catalog_timer.isActive()
+                    else self.catalog_status.text()
+                ),
+                "home_scrolls": (
+                    self.recent_shelf.scroll.horizontalScrollBar().value(),
+                    self.release_shelf.scroll.horizontalScrollBar().value(),
+                ),
+            }
+        )
+        self.view_history = self.view_history[-20:]
+        self.detail_navigation_pending = True
+        self.back_button.setEnabled(True)
+
+    def go_back(self):
+        if not self.view_history:
+            return
+        saved = self.view_history.pop()
+        self.invalidate_search()
+        self.release_context = None
+        for widget in (self.search, self.country, self.search_kind, self.pages):
+            widget.blockSignals(True)
+        try:
+            self.search.setText(saved["query"])
+            self.country.setText(saved["country"])
+            self.search_kind.setCurrentIndex(self.search_kind.findData(saved["mode"]))
+            self.pages.setCurrentIndex(saved["page"])
+        finally:
+            for widget in (self.search, self.country, self.search_kind, self.pages):
+                widget.blockSignals(False)
+        self.remember_storefront()
+        (self.pending_result_kind, self.pending_album_title, self.pending_artist_name) = saved[
+            "context"
+        ]
+        self.render_catalog(saved["result"])
+        self.catalog_status.setText(saved["status"])
+        self.result_list.setCurrentRow(saved["row"])
+        self.back_button.setEnabled(bool(self.view_history))
+        generation = self.generation
+
+        def restore_scroll():
+            if self.closing or generation != self.generation:
+                return
+            self.result_list.verticalScrollBar().setValue(saved["list_scroll"])
+            page = self.pages.widget(saved["page"])
+            if isinstance(page, QScrollArea):
+                page.verticalScrollBar().setValue(saved["page_scroll"])
+            if saved["page"] == 0:
+                for shelf, position in zip(
+                    (self.recent_shelf, self.release_shelf), saved["home_scrolls"], strict=True
+                ):
+                    shelf.scroll.horizontalScrollBar().setValue(position)
+
+        QTimer.singleShot(0, restore_scroll)
+        self.refresh_artwork()
+
     def open_artist(self, artist):
+        self.remember_view()
         self.country.setText(artist.country)
         self.pages.setCurrentIndex(1)
         self.request_catalog(
@@ -375,6 +459,7 @@ class Window(QMainWindow):
     def open_album(self, album):
         if not album:
             return
+        self.remember_view()
         self.country.setText(album.country)
         self.pages.setCurrentIndex(1)
         self.request_catalog(self.catalog.album, album.id, album.country, album_title=album.title)
@@ -682,6 +767,9 @@ class Window(QMainWindow):
     def search_catalog(self):
         self.pages.setCurrentIndex(1)
         if self.search.text().strip():
+            self.view_history.clear()
+            self.back_button.setEnabled(False)
+            self.detail_navigation_pending = False
             self.remember_storefront()
             self.request_catalog(
                 self.catalog.search,
@@ -852,6 +940,112 @@ class Window(QMainWindow):
                     "Could not apply cache limit/settings. Check free space and queued tracks."
                 )
 
+    def render_catalog(self, result):
+        self.detail_navigation_pending = False
+        self.displayed_catalog_context = (
+            self.pending_result_kind,
+            self.pending_album_title,
+            self.pending_artist_name,
+        )
+        self.results = result
+        self.displayed_search_diagnostics = None
+        self.displayed_artist_diagnostics = None
+        if isinstance(result, ArtistAlbums):
+            self.last_artist_diagnostics = result.diagnostics
+            self.displayed_artist_diagnostics = result.diagnostics
+            self.copy_search_button.setEnabled(True)
+        if isinstance(result, SearchResults):
+            self.last_search_diagnostics = result.diagnostics
+            self.displayed_search_diagnostics = result.diagnostics
+            self.copy_search_button.setEnabled(True)
+        self.album_tracks = (
+            tuple(result)
+            if self.pending_album_title and all(isinstance(item, Track) for item in result)
+            else ()
+        )
+        self.play_album_button.setEnabled(bool(self.album_tracks))
+        self.show_album_header()
+        self.result_indices.clear()
+        self.result_list.clear()
+        if self.album_header.album:
+            multiple_discs = any(track.disc_number > 1 for track in self.results)
+            self.result_list.addItems(
+                [track.album_row_title(multiple_discs) for track in self.results]
+            )
+            for index, track in enumerate(self.results):
+                item = self.result_list.item(index)
+                item.setData(TrackRowDelegate.duration_role, track.duration_label)
+                item.setData(Qt.AccessibleDescriptionRole, "Duration " + track.duration_label)
+                item.setSizeHint(QSize(0, 30))
+        elif self.pending_result_kind == "artist_albums":
+            for group, albums_in_group in grouped_releases(self.results):
+                heading = QListWidgetItem(group)
+                heading.setFlags(Qt.ItemIsEnabled)
+                self.result_indices[self.result_list.count()] = -1
+                font = heading.font()
+                font.setBold(True)
+                heading.setFont(font)
+                heading.setSizeHint(QSize(0, 48))
+                self.result_list.addItem(heading)
+                self.result_list.setItemWidget(heading, release_heading(group, self.result_list))
+                for album in albums_in_group:
+                    item = QListWidgetItem(
+                        album.release_title + (" — " + album.artist if album.artist else "")
+                    )
+                    self.result_indices[self.result_list.count()] = self.results.index(album)
+                    set_artwork_icon(item, QImage())
+                    self.result_list.addItem(item)
+        else:
+            self.result_list.addItems(
+                [
+                    (
+                        item.release_title + (" — " + item.artist if item.artist else "")
+                        if isinstance(item, Album)
+                        else item.title
+                    )
+                    + (" · " + item.genre if isinstance(item, Artist) and item.genre else "")
+                    for item in self.results
+                ]
+            )
+            for index, item in enumerate(self.results):
+                if not isinstance(item, Artist):
+                    set_artwork_icon(self.result_list.item(index), QImage())
+        if self.results:
+            self.result_list.setCurrentRow(1 if self.pending_result_kind == "artist_albums" else 0)
+        albums = self.pending_result_kind in {"albums", "artist_albums"}
+        artists = self.pending_result_kind == "artists"
+        self.browse_button.setVisible(not artists and not self.album_header.album)
+        self.selected_button.setText(
+            "Open artist" if artists else "Open album" if albums else "Queue selected"
+        )
+        self.selected_button.setEnabled(bool(self.results))
+        self.all_button.setText("Queue album" if self.pending_album_title else "Queue all results")
+        self.all_button.setEnabled(bool(self.results) and not albums and not artists)
+        label = "artists" if artists else "albums" if albums else "songs"
+        if len(self.results) == 1:
+            label = label[:-1]
+        action = "open artist" if artists else "open album" if albums else "queue"
+        context = "" if self.album_header.album else self.pending_album_title
+        self.catalog_status.setText(
+            (
+                ""
+                if self.album_header.album
+                else f"{context + ' · ' if context else ''}" + f"{len(self.results)} {label} · "
+            )
+            + (f"double-click to {action}" if self.results else "try another query or storefront")
+        )
+        if self.pending_result_kind == "artist_albums":
+            self.catalog_status.setText(
+                self.pending_artist_name
+                + " · "
+                + self.catalog_status.text()
+                + " · Approximate groups; unmarked releases are in Albums"
+            )
+        if isinstance(result, SearchResults):
+            self.catalog_status.setText(
+                f"Results for “{result.diagnostics['query']}” · " + self.catalog_status.text()
+            )
+
     def tick(self):
         self.artwork.poll()
         self.artwork_status.setText(self.artwork.status())
@@ -880,133 +1074,7 @@ class Window(QMainWindow):
                         self.receive_releases(result)
                         result = None
                     if result is not None:
-                        self.results = result
-                        self.displayed_search_diagnostics = None
-                        self.displayed_artist_diagnostics = None
-                        if isinstance(result, ArtistAlbums):
-                            self.last_artist_diagnostics = result.diagnostics
-                            self.displayed_artist_diagnostics = result.diagnostics
-                            self.copy_search_button.setEnabled(True)
-                        if isinstance(result, SearchResults):
-                            self.last_search_diagnostics = result.diagnostics
-                            self.displayed_search_diagnostics = result.diagnostics
-                            self.copy_search_button.setEnabled(True)
-                        self.album_tracks = (
-                            tuple(result)
-                            if self.pending_album_title
-                            and all(isinstance(item, Track) for item in result)
-                            else ()
-                        )
-                        self.play_album_button.setEnabled(bool(self.album_tracks))
-                        self.show_album_header()
-                        self.result_indices.clear()
-                        self.result_list.clear()
-                        if self.album_header.album:
-                            multiple_discs = any(track.disc_number > 1 for track in self.results)
-                            self.result_list.addItems(
-                                [track.album_row_title(multiple_discs) for track in self.results]
-                            )
-                            for index, track in enumerate(self.results):
-                                item = self.result_list.item(index)
-                                item.setData(TrackRowDelegate.duration_role, track.duration_label)
-                                item.setData(
-                                    Qt.AccessibleDescriptionRole, "Duration " + track.duration_label
-                                )
-                                item.setSizeHint(QSize(0, 30))
-                        elif self.pending_result_kind == "artist_albums":
-                            for group, albums_in_group in grouped_releases(self.results):
-                                heading = QListWidgetItem(group)
-                                heading.setFlags(Qt.ItemIsEnabled)
-                                self.result_indices[self.result_list.count()] = -1
-                                font = heading.font()
-                                font.setBold(True)
-                                heading.setFont(font)
-                                heading.setSizeHint(QSize(0, 48))
-                                self.result_list.addItem(heading)
-                                self.result_list.setItemWidget(
-                                    heading, release_heading(group, self.result_list)
-                                )
-                                for album in albums_in_group:
-                                    item = QListWidgetItem(
-                                        album.release_title
-                                        + (" — " + album.artist if album.artist else "")
-                                    )
-                                    self.result_indices[self.result_list.count()] = (
-                                        self.results.index(album)
-                                    )
-                                    set_artwork_icon(item, QImage())
-                                    self.result_list.addItem(item)
-                        else:
-                            self.result_list.addItems(
-                                [
-                                    (
-                                        item.release_title
-                                        + (" — " + item.artist if item.artist else "")
-                                        if isinstance(item, Album)
-                                        else item.title
-                                    )
-                                    + (
-                                        " · " + item.genre
-                                        if isinstance(item, Artist) and item.genre
-                                        else ""
-                                    )
-                                    for item in self.results
-                                ]
-                            )
-                            for index, item in enumerate(self.results):
-                                if not isinstance(item, Artist):
-                                    set_artwork_icon(self.result_list.item(index), QImage())
-                        if self.results:
-                            self.result_list.setCurrentRow(
-                                1 if self.pending_result_kind == "artist_albums" else 0
-                            )
-                        albums = self.pending_result_kind in {"albums", "artist_albums"}
-                        artists = self.pending_result_kind == "artists"
-                        self.browse_button.setVisible(not artists and not self.album_header.album)
-                        self.selected_button.setText(
-                            "Open artist"
-                            if artists
-                            else "Open album"
-                            if albums
-                            else "Queue selected"
-                        )
-                        self.selected_button.setEnabled(bool(self.results))
-                        self.all_button.setText(
-                            "Queue album" if self.pending_album_title else "Queue all results"
-                        )
-                        self.all_button.setEnabled(
-                            bool(self.results) and not albums and not artists
-                        )
-                        label = "artists" if artists else "albums" if albums else "songs"
-                        if len(self.results) == 1:
-                            label = label[:-1]
-                        action = "open artist" if artists else "open album" if albums else "queue"
-                        context = "" if self.album_header.album else self.pending_album_title
-                        self.catalog_status.setText(
-                            (
-                                ""
-                                if self.album_header.album
-                                else f"{context + ' · ' if context else ''}"
-                                + f"{len(self.results)} {label} · "
-                            )
-                            + (
-                                f"double-click to {action}"
-                                if self.results
-                                else "try another query or storefront"
-                            )
-                        )
-                        if self.pending_result_kind == "artist_albums":
-                            self.catalog_status.setText(
-                                self.pending_artist_name
-                                + " · "
-                                + self.catalog_status.text()
-                                + " · Title-based groups; unmarked releases are in Others"
-                            )
-                        if isinstance(result, SearchResults):
-                            self.catalog_status.setText(
-                                f"Results for “{result.diagnostics['query']}” · "
-                                + self.catalog_status.text()
-                            )
+                        self.render_catalog(result)
                 except CatalogDeferred as exc:
                     if exc.rate_limited:
                         self.catalog_retries += 1

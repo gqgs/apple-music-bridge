@@ -80,12 +80,17 @@ The public iTunes [result documentation](https://developer.apple.com/library/arc
 Our mutually exclusive groups are title heuristics, in this priority:
 - Singles & EPs: final separated EP/Single markers, including parenthesized labels such as UK CD1 Single. Supported Spanish single markers include Sencillo/Sencilla and their plurals.
 - Compilations: explicit Greatest Hits, Compilation, Compilación, Compilações or Coletânea phrases; exact Anthology/Antologia/Antología or Best Of titles; or Best Of followed by the actual artist name.
-- Live Albums: explicit parenthesized/bracketed or dash-separated Live/Ao Vivo/En Vivo markers, or Live at/in/from prefixes. Bare words such as Live Forever, I Live or Cornucopia Live are ambiguous and stay in Others.
-- Albums: explicit final Album/Álbum/Studio Album/LP markers only.
-- Others: every unmarked or unknown release. In particular, an ordinary studio-album title can appear here: we cannot safely distinguish it from an unmarked single or compilation.
+- Live Albums: explicit parenthesized/bracketed or dash-separated Live/Ao Vivo/En Vivo markers, or Live at/in/from prefixes. Bare words such as Live Forever, I Live or Cornucopia Live are ambiguous and use the Albums fallback.
+- Albums: explicit final Album/Álbum/Studio Album/LP markers and all otherwise unmarked titled releases, as requested. This is a practical default, not verified studio-album classification.
+- Others: releases without a usable title. Unknown titled releases now appear in Albums; an unmarked single, live recording or compilation can consequently appear there too.
 
-No track-count thresholds, guessed editorial fields, artist-specific hardcoded catalogs or translated-label guesses beyond the listed markers are used. [Apple's public Björk page](https://music.apple.com/us/artist/bj%C3%B6rk/295015?uo=4) supplies source names for tests (Human Behaviour (UK Remixes) - EP, Big Time Sensuality (UK CD1 Single), Vulnicura (Live), Björk's Greatest Hits, Fossora, Bastards). It also shows overlapping editorial categories. Our fixtures test the stated heuristic, not equality with Apple's taxonomy; Bastards and Fossora remain unknown without title hints.
+No track-count thresholds, guessed editorial fields, artist-specific hardcoded catalogs or translated-label guesses beyond the listed markers are used. [Apple's public Björk page](https://music.apple.com/us/artist/bj%C3%B6rk/295015?uo=4) supplies source names for tests (Human Behaviour (UK Remixes) - EP, Big Time Sensuality (UK CD1 Single), Vulnicura (Live), Björk's Greatest Hits, Fossora, Bastards). It also shows overlapping editorial categories. Our fixtures test the stated heuristic, not equality with Apple's taxonomy; Bastards and Fossora use the approximate Albums fallback without title hints.
 
 Artists is the initial search mode. Direct song/album URL controls are removed; internal canonical playback URLs and parsing remain. The user accepts artist browsing as the practical workaround for public album-search omissions; no extra diagnostic UI was added.
 
 Synthetic grouped artist previews: [normal](artist-groups.png) and [small/high-DPI](artist-groups-small.png).
+
+
+## Back navigation
+
+**← Back** or **Alt+Left** restores up to 20 prior inspection views in memory, including search text/mode/storefront, selected result, result-list/page scroll and Home shelf positions. It reuses the displayed metadata snapshot without a catalog request and never changes playback or the queue. Opening an album/artist records the return view; repeated clicks while loading share that destination. Back cancels pending/cooldown work, and late responses cannot overwrite the restored view. A new explicit search starts a new navigation trail. This history is session-only and is distinct from listening history.

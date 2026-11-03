@@ -326,7 +326,7 @@ def release_group(album):
         r"(?:\s[-–—]\s*|[([])(?:studio album|album|álbum|LP)[)\]]?$", title, re.IGNORECASE
     ):
         return "Albums"
-    return "Others"
+    return "Albums" if title else "Others"
 
 
 def grouped_releases(albums):

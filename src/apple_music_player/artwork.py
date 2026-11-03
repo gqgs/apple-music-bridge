@@ -46,13 +46,17 @@ def allowed_url(url):
 class ArtworkRedirect(HTTPRedirectHandler):
     max_redirections = 3
 
+    def __init__(self, validator=allowed_url):
+        super().__init__()
+        self.validator = validator
+
     def redirect_request(self, req, fp, code, msg, headers, newurl):
-        if not allowed_url(newurl):
+        if not self.validator(newurl):
             raise ValueError("Unsafe artwork redirect")
         return super().redirect_request(req, fp, code, msg, headers, newurl)
 
 
-def decode(data):
+def decode(data, max_dimension=256):
     if len(data) > MAX_BYTES:
         raise ValueError("Artwork too large")
     buffer = QBuffer()
@@ -70,14 +74,18 @@ def decode(data):
     image = reader.read()
     if image.isNull():
         raise ValueError("Corrupt artwork")
-    if max(image.width(), image.height()) > 256:
-        image = image.scaled(256, 256, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+    if max(image.width(), image.height()) > max_dimension:
+        image = image.scaled(
+            max_dimension, max_dimension, Qt.KeepAspectRatio, Qt.SmoothTransformation
+        )
     return image
 
 
 class ArtworkCache:
-    def __init__(self, root, limit=32 * 1024**2):
+    def __init__(self, root, limit=32 * 1024**2, validator=allowed_url, max_dimension=256):
         self.root = private_dir(root)
+        self.allowed_url = validator
+        self.max_dimension = max_dimension
         self.limit = limit
         self.lock = threading.Lock()
         self.failures = {}
@@ -102,13 +110,14 @@ class ArtworkCache:
             total -= path.stat().st_size
             path.unlink()
 
-    def load(self, url):
-        if not allowed_url(url):
+    def load(self, url, cache_only=False):
+        if not self.allowed_url(url):
             return QImage()
         path = self.root / (sha256(url.encode()).hexdigest() + ".img")
         try:
             with self.lock:
-                self.failures.pop(url, None)
+                if not cache_only:
+                    self.failures.pop(url, None)
                 safe_path(self.root, path)
                 if path.exists():
                     if path.stat().st_nlink != 1:
@@ -116,18 +125,20 @@ class ArtworkCache:
                     try:
                         if time.time() - path.stat().st_mtime < 7 * 86400:
                             with path.open("rb") as stream:
-                                image = decode(stream.read(MAX_BYTES + 1))
+                                image = decode(stream.read(MAX_BYTES + 1), self.max_dimension)
                             os.utime(path, None)
                             return image
                     except (ValueError, OSError):
                         pass
                     path.unlink()
-            opener = build_opener(ArtworkRedirect())
+            if cache_only:
+                return QImage()
+            opener = build_opener(ArtworkRedirect(self.allowed_url))
             request = Request(
                 url, headers={"User-Agent": "NativeMusicPlayer/0.1", "Accept": "image/*"}
             )
             with opener.open(request, timeout=8) as response:
-                if not allowed_url(response.url):
+                if not self.allowed_url(response.url):
                     raise ValueError("Unsafe redirect")
                 if response.headers.get_content_type() not in (
                     "image/png",
@@ -147,7 +158,7 @@ class ArtworkCache:
                     chunks.append(chunk)
                     size += len(chunk)
                 data = b"".join(chunks)
-            image = decode(data)
+            image = decode(data, self.max_dimension)
             if len(data) <= self.limit:
                 with self.lock:
                     safe_path(self.root, path)

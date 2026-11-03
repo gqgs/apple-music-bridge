@@ -206,18 +206,22 @@ class Catalog:
         diagnostics["artist_id"] = artist_id
         return ArtistAlbums(albums, diagnostics)
 
-    def search(self, query, country, entity="song"):
+    def search(self, query, country, entity="song", *, limit=None):
         if not re.fullmatch("[a-z]{2}", country):
             raise PlayerError("Storefront must be a two-letter country code, e.g. us.")
         if entity not in {"song", "album", "musicArtist"}:
             raise PlayerError("Choose Songs, Albums or Artists.")
+        if limit is None:
+            limit = 200 if entity == "album" else 50
+        if type(limit) is not int or not 1 <= limit <= 200:
+            raise PlayerError("Catalog search limit must be between 1 and 200.")
         parse = {"album": self.albums, "song": self.tracks, "musicArtist": self.artists}[entity]
         params = dict(
             term=query[:200],
             country=country,
             media="music",
             entity=entity,
-            limit=200 if entity == "album" else 50,
+            limit=limit,
         )
         rows = self.request("search", **params)
         accepted = parse(rows, country)

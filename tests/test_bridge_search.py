@@ -21,10 +21,10 @@ def test_supersonic_parallel_auxiliary_requests_and_covers_bypass_catalog(bridge
     entered, release = threading.Event(), threading.Event()
     original = server.actor.core.catalog.search
 
-    def slow(*args):
+    def slow(*args, **kwargs):
         entered.set()
         assert release.wait(3)
-        return original(*args)
+        return original(*args, **kwargs)
 
     monkeypatch.setattr(server.actor.core.catalog, "search", slow)
     with ThreadPoolExecutor(8) as pool:
@@ -84,11 +84,11 @@ def test_metadata_deadline_cancels_queued_and_remaining_entity_work(tmp_path):
     calls = []
 
     class SlowCatalog(FakeCatalog):
-        def search(self, query, country, entity="song"):
+        def search(self, query, country, entity="song", *, limit=None):
             calls.append((query, entity))
             entered.set()
             assert release.wait(3)
-            return super().search(query, country, entity)
+            return super().search(query, country, entity, limit=limit)
 
     actor = Actor(
         lambda cancel: ProtocolCore(tmp_path / "cache", 1024, catalog=SlowCatalog(), cancel=cancel)
@@ -195,11 +195,11 @@ def test_three_entity_cold_latency_cache_paging_and_validation(tmp_path, monkeyp
         )
         with pytest.raises(BridgeError):
             core.dispatch("search3", dict(params, query="new", songCount="invalid"))
-        assert len(starts) == 3  # Validate all numeric fields before any network call.
+        assert len(starts) == 4  # Validate all numeric fields before any network call.
         core.operation_deadline = now[0] + 2
         with pytest.raises(BridgeError):
             core.dispatch("search3", dict(params, query="new"))
-        assert len(starts) == 3  # Deadline never bypasses catalog spacing.
+        assert len(starts) == 4  # Deadline never bypasses catalog spacing.
     finally:
         core.close()
 
@@ -211,10 +211,10 @@ def test_slow_download_does_not_hold_catalog_worker(bridge, monkeypatch):
     downloader = server.actor.core.downloader
     original = downloader.run
 
-    def slow(*args):
+    def slow(*args, **kwargs):
         entered.set()
         assert release.wait(3)
-        return original(*args)
+        return original(*args, **kwargs)
 
     monkeypatch.setattr(downloader, "run", slow)
     with ThreadPoolExecutor(2) as pool:
@@ -408,11 +408,11 @@ def test_singleflight_waiter_timeout_does_not_cancel_other_waiter(tmp_path):
     calls = []
 
     class SlowCatalog(FakeCatalog):
-        def search(self, query, country, entity="song"):
+        def search(self, query, country, entity="song", *, limit=None):
             calls.append((query, entity))
             entered.set()
             assert release.wait(2)
-            return super().search(query, country, entity)
+            return super().search(query, country, entity, limit=limit)
 
     actor = Actor(
         lambda cancel: ProtocolCore(tmp_path / "cache", 1024, catalog=SlowCatalog(), cancel=cancel)
@@ -452,11 +452,11 @@ def test_singleflight_does_not_combine_distinct_requests(tmp_path, difference):
     calls = []
 
     class SlowCatalog(FakeCatalog):
-        def search(self, query, country, entity="song"):
+        def search(self, query, country, entity="song", *, limit=None):
             calls.append((query, entity))
             entered.set()
             assert release.wait(2)
-            return super().search(query, country, entity)
+            return super().search(query, country, entity, limit=limit)
 
     actor = Actor(
         lambda cancel: ProtocolCore(tmp_path / "cache", 1024, catalog=SlowCatalog(), cancel=cancel)
@@ -485,11 +485,11 @@ def test_identical_http_search_burst_shares_one_flight(bridge, monkeypatch):
     calls = []
     original = server.actor.core.catalog.search
 
-    def slow(*args):
+    def slow(*args, **kwargs):
         calls.append(args)
         entered.set()
         assert release.wait(3)
-        return original(*args)
+        return original(*args, **kwargs)
 
     monkeypatch.setattr(server.actor.core.catalog, "search", slow)
     try:
@@ -511,3 +511,123 @@ def test_identical_http_search_burst_shares_one_flight(bridge, monkeypatch):
         assert len(calls) == 3
     finally:
         release.set()
+
+
+@pytest.mark.parametrize(
+    "kind,entity", [("artist", "musicArtist"), ("album", "album"), ("song", "song")]
+)
+def test_category_only_search_counts_paging_and_shared_limiter(tmp_path, monkeypatch, kind, entity):
+    now = [100.0]
+    requests = []
+    monkeypatch.setattr("apple_music_player.catalog.time.monotonic", lambda: now[0])
+
+    class ClockEvent:
+        def is_set(self):
+            return False
+
+        def wait(self, seconds):
+            now[0] += seconds
+
+    def opened(url, timeout):
+        params = parse_qs(urlsplit(url).query)
+        requests.append((params, now[0]))
+        assert params["country"] == ["br"]
+        assert params["entity"] == [entity]
+        assert "offset" not in params
+        rows = []
+        for i in range(1, int(params["limit"][0]) + 1):
+            row = dict(artistId=i, artistName=f"Artist {i}")
+            if kind == "artist":
+                row.update(wrapperType="artist", artistType="Artist")
+            elif kind == "album":
+                row.update(
+                    wrapperType="collection",
+                    collectionType="Album",
+                    collectionId=i,
+                    collectionName=f"Album {i}",
+                )
+            else:
+                row.update(wrapperType="track", kind="song", trackId=i, trackName=f"Song {i}")
+            rows.append(row)
+        return io.BytesIO(json.dumps({"results": rows}).encode())
+
+    monkeypatch.setattr("apple_music_player.catalog.urlopen", opened)
+    core = ProtocolCore(tmp_path / "cache", 1024, cancel=ClockEvent())
+    params = {"query": "bjork", "artistCount": "0", "albumCount": "0", "songCount": "0"}
+    try:
+        assert all(not rows for rows in core.dispatch("search3", params)["searchResult3"].values())
+        assert requests == []
+        params[kind + "Count"] = "20"
+        first = core.dispatch("search3", params)["searchResult3"]
+        assert all(not rows for name, rows in first.items() if name != kind)
+        assert len(first[kind]) == 20
+        page = dict(params, **{kind + "Offset": "20"})
+        second = core.dispatch("search3", page)["searchResult3"][kind]
+        assert [row["id"].rsplit(":", 1)[1] for row in second] == [str(i) for i in range(21, 41)]
+        assert core.dispatch("search3", page)["searchResult3"][kind] == second
+        assert [(p["limit"][0], t) for p, t in requests] == [("20", 100), ("40", 103)]
+        last = core.dispatch("search3", dict(params, **{kind + "Offset": "190"}))["searchResult3"][
+            kind
+        ]
+        assert len(last) == 10 and last[-1]["id"].endswith(":200")
+        assert requests[-1][0]["limit"] == ["200"]
+        count = len(requests)
+        assert (
+            core.dispatch("search3", dict(params, **{kind + "Offset": "200"}))["searchResult3"][
+                kind
+            ]
+            == []
+        )
+        assert len(requests) == count
+        with pytest.raises(BridgeError):
+            core.dispatch("search3", dict(params, songOffset="invalid"))
+        assert len(requests) == count
+    finally:
+        core.close()
+
+
+def test_catalog_limits_preserve_qt_defaults(monkeypatch):
+    from apple_music_player.catalog import Catalog
+    from apple_music_player.model import PlayerError
+
+    catalog = Catalog()
+    requests = []
+
+    def request(endpoint, **params):
+        requests.append(params)
+        return []
+
+    monkeypatch.setattr(catalog, "request", request)
+    for entity in ("musicArtist", "album", "song"):
+        catalog.search("bjork", "br", entity)
+    assert [p["limit"] for p in requests] == [50, 200, 50]
+    for bad in (0, -1, 201, True, "20"):
+        with pytest.raises(PlayerError):
+            catalog.search("bjork", "br", limit=bad)
+    assert len(requests) == 3
+
+
+def test_http_artist_only_search_uses_one_requested_upstream_limit(bridge, monkeypatch):
+    from apple_music_player.catalog import Catalog
+
+    server, _ = bridge
+    server.actor.core.catalog = Catalog()
+    requests = []
+
+    def opened(url, timeout):
+        params = parse_qs(urlsplit(url).query)
+        requests.append(params)
+        return io.BytesIO(b'{"results": []}')
+
+    monkeypatch.setattr("apple_music_player.catalog.urlopen", opened)
+    result = payload(
+        server,
+        "search3",
+        {"query": "bjork", "artistCount": "50", "albumCount": "0", "songCount": "0"},
+    )
+    assert result["status"] == "ok"
+    assert result["searchResult3"] == {"artist": [], "album": [], "song": []}
+    assert len(requests) == 1
+    assert requests[0]["entity"] == ["musicArtist"]
+    assert requests[0]["limit"] == ["50"]
+    assert requests[0]["country"] == ["br"]

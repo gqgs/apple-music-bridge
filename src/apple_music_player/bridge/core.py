@@ -208,8 +208,17 @@ class Core:
         if not query.strip():
             values = self.known(kind)
         else:
+            # Public search has a bounded result window, not a documented offset.
+            # Fetch the required prefix and slice locally; never refetch page one as
+            # a later page, or claim an unlimited Apple Music catalog.
+            if offset >= 200:
+                return []
             entity = {"artist": "musicArtist", "album": "album", "song": "song"}[kind]
-            values = self.remember(self.request(self.catalog.search, query, self.country, entity))
+            values = self.remember(
+                self.request(
+                    self.catalog.search, query, self.country, entity, limit=min(200, offset + count)
+                )
+            )
         return values[offset : offset + count]
 
     def child_counts(self):

@@ -459,3 +459,27 @@ The HTTP regression sends eight simultaneous identical searches and verifies one
 three-entity dispatch serves all eight. This complements a longer client debounce;
 it deliberately does not collapse the four distinct typing-prefix queries. Client
 cancellation/debounce changes are separate from this bridge PR.
+
+### Artist-first client search contract
+
+A client can request only artists with `search3`, `artistCount=20`, `albumCount=0`,
+`songCount=0`, and `artistOffset=0`. This makes one cold upstream request instead
+of three. Album-only and song-only requests work the same way; mixed requests and
+omitted counts (20 each) retain their normal protocol meaning. No client names are
+special-cased and no requested category is silently discarded.
+
+The bridge requests an upstream limit of `min(offset + count, 200)` for each enabled
+category, then slices locally. For example, the second artist page (`offset=20`,
+`count=20`) fetches a 40-result prefix and returns entries 21–40. Identical pages
+reuse the catalog cache; a larger prefix is another request through the shared
+three-second limiter. No undocumented upstream offset is sent. Offset 200 returns
+an empty page without another request. This is a bounded public search window,
+not full-catalog pagination; upstream ranking/catalog changes can shift pages.
+Qt defaults remain 50 artists/songs and 200 albums. Artist/album detail lookups
+remain explicit, separate operations. Client-side artist-first navigation must
+avoid automatic album/song expansion to realize the latency benefit.
+
+[Apple's public Search API documentation](https://performance-partners.apple.com/search-api)
+specifies limits from 1 to 200 and recommends reducing requested result counts for
+response time. Its documented search parameters do not include an offset. The
+bridge's prefix-and-slice approach makes that limitation explicit.

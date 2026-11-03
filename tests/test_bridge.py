@@ -23,7 +23,7 @@ KEY = "test-bridge-secret-" + "x" * 32
 
 
 class FakeCatalog(Catalog):
-    def search(self, query, country, entity="song"):
+    def search(self, query, country, entity="song", *, limit=None):
         assert country == "br"
         return {"musicArtist": [ARTIST], "album": [ALBUM], "song": [TRACK]}[entity]
 

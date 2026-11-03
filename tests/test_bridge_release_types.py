@@ -53,8 +53,8 @@ def test_all_album_serializations_and_xml(bridge, monkeypatch, title, expected):
     server, _ = bridge
     album = replace(ALBUM, title=title, album_title=title)
     server.actor.call("remember", [ARTIST, album, TRACK])
-    monkeypatch.setattr(server.actor.core.catalog, "search", lambda *args: [album])
-    monkeypatch.setattr(server.actor.core.catalog, "artist_albums", lambda *args: [album])
+    monkeypatch.setattr(server.actor.core.catalog, "search", lambda *args, **kwargs: [album])
+    monkeypatch.setattr(server.actor.core.catalog, "artist_albums", lambda *args, **kwargs: [album])
     album_id = "am:br:lossless:album:2"
     results = [
         payload(server, "getAlbum", {"id": album_id})["album"],

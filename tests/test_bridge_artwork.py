@@ -13,7 +13,7 @@ from test_bridge import ALBUM, ARTIST, TRACK, payload, request
 from test_bridge import bridge as _bridge
 
 from apple_music_player.artwork import MAX_BYTES, ArtworkRedirect
-from apple_music_player.bridge.artwork import Covers
+from apple_music_player.bridge.artwork import Covers, CoverUnavailable
 
 bridge = _bridge
 
@@ -81,7 +81,9 @@ def test_unsafe_urls_and_redirects_are_not_fetched(tmp_path, monkeypatch, url):
     calls = transport(monkeypatch, image_bytes())
     covers = Covers(tmp_path / "art")
     try:
-        assert covers.get(url) == b"" and not calls
+        with pytest.raises(CoverUnavailable):
+            covers.get(url)
+        assert not calls
         with pytest.raises(ValueError):
             ArtworkRedirect().redirect_request(None, None, 302, "", {}, url)
     finally:
@@ -102,8 +104,10 @@ def test_invalid_responses_fall_back_and_do_not_hot_retry(tmp_path, monkeypatch,
     calls = transport(monkeypatch, data, mime, final)
     covers = Covers(tmp_path / "art")
     try:
-        assert covers.get(URL, 100) == b""
-        assert covers.get(URL, 100) == b""
+        with pytest.raises(CoverUnavailable):
+            covers.get(URL, 100)
+        with pytest.raises(CoverUnavailable):
+            covers.get(URL, 100)
         assert len(calls) == 1
         assert not list(covers.cache.root.glob("*.img"))
     finally:
@@ -183,16 +187,23 @@ def test_transient_retry_is_bounded_and_denials_are_not_retried(tmp_path, monkey
     covers = Covers(tmp_path / "art")
     try:
         for attempt in range(3):
-            assert covers.get(URL, 100) == b""
+            with pytest.raises(CoverUnavailable):
+                covers.get(URL, 100)
             wait_until(lambda: not covers.pending)
-            assert covers.get(URL, 100) == b""
+            with pytest.raises(CoverUnavailable):
+                covers.get(URL, 100)
             assert len(calls) == attempt + 1
             now[0] += 31
-        assert covers.get(URL, 100) == b"" and len(calls) == 3
-        assert covers.get(URL + "denied") == b""
+        with pytest.raises(CoverUnavailable):
+            covers.get(URL, 100)
+        assert len(calls) == 3
+        with pytest.raises(CoverUnavailable):
+            covers.get(URL + "denied")
         wait_until(lambda: not covers.pending)
-        now[0] += 99999
-        assert covers.get(URL + "denied") == b"" and len(calls) == 4
+        now[0] += 200
+        with pytest.raises(CoverUnavailable):
+            covers.get(URL + "denied")
+        assert len(calls) == 4
     finally:
         covers.close()
 
@@ -210,17 +221,25 @@ def test_worker_and_waiter_bounds_and_close(tmp_path, monkeypatch):
         return image_bytes()
 
     monkeypatch.setattr(covers, "load", slow)
-    with ThreadPoolExecutor(4) as pool:
-        futures = [pool.submit(covers.get, URL + str(n)) for n in range(4)]
+    with ThreadPoolExecutor(8) as pool:
+        futures = [pool.submit(covers.get, URL + str(n)) for n in range(8)]
         try:
-            wait_until(lambda: len(covers.pending) == 4)
+            wait_until(lambda: len(covers.pending) == 8)
             assert len(calls) == 2
-            assert covers.get(URL + "excess") == b""
+            with pytest.raises(CoverUnavailable):
+                covers.get(URL + "excess")
             covers.close()  # Queued work is cancelled; running fetches finish independently.
-            assert covers.get(URL, 100) == b""
+            with pytest.raises(CoverUnavailable):
+                covers.get(URL, 100)
         finally:
             release.set()
-        assert sum(bool(f.result()) for f in futures) == 2
+        successes = 0
+        for future in futures:
+            try:
+                successes += bool(future.result())
+            except CoverUnavailable:
+                pass
+        assert successes == 2
 
 
 def test_higher_resolution_and_client_size(tmp_path, monkeypatch):
@@ -287,3 +306,91 @@ def test_http_requested_cover_size(bridge, monkeypatch):
         payload(server, "getCoverArt", {"id": "am:br:lossless:album:2", "size": "-1"})["status"]
         == "failed"
     )
+
+
+def test_supersonic_five_worker_burst_returns_every_cover(bridge, monkeypatch):
+    import time
+
+    server, _ = bridge
+    items = [
+        replace(ALBUM, id=str(100 + i), artwork_url=URL.replace("fixture", f"fixture-{i}"))
+        for i in range(40)
+    ]
+    server.actor.call("remember", items)
+    calls = []
+
+    def delayed(url):
+        calls.append(url)
+        time.sleep(0.015)
+        return image_bytes(width=400)
+
+    monkeypatch.setattr(server.covers, "load", delayed)
+
+    def fetch(item):
+        return request(
+            server, "getCoverArt", {"id": f"am:br:lossless:album:{item.id}", "size": "300"}
+        )
+
+    with ThreadPoolExecutor(5) as pool:
+        responses = list(pool.map(fetch, items))
+    assert all(
+        status == 200 and headers["X-Artwork-Status"] == "available"
+        for status, headers, _ in responses
+    )
+    assert len(calls) == 40
+
+
+def test_failures_are_not_successful_images_and_diagnostics_are_sanitized(bridge, monkeypatch):
+    server, _ = bridge
+    calls = transport(monkeypatch, b"not an image")
+    server.actor.call("remember", [replace(ALBUM, artwork_url=URL)])
+    response = request(server, "getCoverArt", {"id": "am:br:lossless:album:2"})
+    assert response[0] == 503 and response[1]["Cache-Control"] == "no-store"
+    assert not response[2]  # Supersonic cannot decode/cache a successful placeholder.
+    diagnostics = payload(server, "getBridgeDiagnostics")
+    assert diagnostics["status"] == "ok" and diagnostics["bridgeDiagnostics"]["metric"]
+    text = str(diagnostics)
+    assert URL not in text and "fixture" not in text and "apiKey" not in text
+    assert payload(server, "getBridgeDiagnostics", auth=False)["error"]["code"] == 40
+    assert len(calls) == 2  # Failed variant then failed original.
+
+
+def test_failure_map_does_not_suppress_unrelated_or_warm_covers(tmp_path, monkeypatch):
+    import time
+    from concurrent.futures import Future
+
+    covers = Covers(tmp_path / "art")
+    calls = transport(monkeypatch, image_bytes())
+    try:
+        assert covers.get(URL, 100)
+        for i in range(300):
+            future = Future()
+            future.set_result(b"")
+            covers.finished(URL + f"?failed={i}", future)
+        assert len(covers.failures) == 256
+        # Even a full in-flight queue and negative map cannot block a disk hit.
+        with covers.lock:
+            covers.pending.update({f"pending-{i}": Future() for i in range(8)})
+        assert covers.get(URL, 100) and len(calls) == 1
+        with covers.lock:
+            covers.pending.clear()
+        assert covers.get(URL + "?new=1", 100) and len(calls) == 2
+        assert all(after > time.monotonic() for _, after in covers.failures.values())
+    finally:
+        covers.close()
+
+
+def test_busy_metadata_is_not_a_successful_placeholder(bridge):
+    import sqlite3
+
+    server, _ = bridge
+    server.actor.call("remember", [ALBUM])
+    connection = sqlite3.connect(server.actor.core.cache.root / "index.sqlite3")
+    try:
+        connection.execute("BEGIN EXCLUSIVE")
+        response = request(server, "getCoverArt", {"id": "am:br:lossless:album:2"})
+        assert response[1]["Content-Type"] != "image/png"
+        assert b'"status": "failed"' in response[2]
+    finally:
+        connection.rollback()
+        connection.close()

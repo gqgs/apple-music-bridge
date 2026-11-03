@@ -110,13 +110,14 @@ class ArtworkCache:
             total -= path.stat().st_size
             path.unlink()
 
-    def load(self, url):
+    def load(self, url, cache_only=False):
         if not self.allowed_url(url):
             return QImage()
         path = self.root / (sha256(url.encode()).hexdigest() + ".img")
         try:
             with self.lock:
-                self.failures.pop(url, None)
+                if not cache_only:
+                    self.failures.pop(url, None)
                 safe_path(self.root, path)
                 if path.exists():
                     if path.stat().st_nlink != 1:
@@ -130,6 +131,8 @@ class ArtworkCache:
                     except (ValueError, OSError):
                         pass
                     path.unlink()
+            if cache_only:
+                return QImage()
             opener = build_opener(ArtworkRedirect(self.allowed_url))
             request = Request(
                 url, headers={"User-Agent": "NativeMusicPlayer/0.1", "Accept": "image/*"}

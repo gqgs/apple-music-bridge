@@ -89,13 +89,21 @@ independently of media eviction, capped at 5,000 records. Typed IDs distinguish
 artist/album/song and include country/profile; evicted metadata can be resolved by
 numeric ID again. No title-based remapping across storefronts.
 
-One core worker owns SQLite writes, catalog requests and downloads. At most 16 HTTP
+One core worker owns SQLite writes and catalog requests; a separate single worker
+runs downloads and managed-runtime readiness checks. All catalog requests (including
+track resolution before a download) still use the same Catalog instance/rate limiter.
+At most 16 HTTP
 workers/connections are active; excess connections receive HTTP 503 with Retry-After.
 At most four metadata requests are admitted concurrently; excess metadata work
-receives a sanitized protocol busy error instead of joining an unbounded queue. This serializes cold
+receives a sanitized protocol busy error instead of joining an unbounded queue.
+This serializes cold
 misses, deduplicates successful identical downloads, bounds queue growth and permits
-concurrent warm streams. Slow downloads also delay metadata work: an explicit PoC
-tradeoff. Full files download/probe/commit before response headers. Downloader timeout
+concurrent warm streams. Downloads have their own four-operation admission bound;
+queued duplicates recheck the media cache before downloading. Cache commit and
+lease acquisition run together on the core worker. Downloads do not hold that
+worker while fetching/decrypting/probing media; catalog waits can still delay a
+short cache transaction or track resolution. Full files download/probe/commit before
+response headers. Downloader timeout
 is 900 seconds; a client's shorter timeout may require retry after completion.
 Completed media is bounded by the configured limit, with the existing separate
 2 GiB staging allowance/free-space reserve. This is not a hard total-disk quota.
@@ -121,8 +129,10 @@ not the catalog queue. Unknown or evicted metadata returns a placeholder without
 an additional Apple lookup; opening/searching the item restores its metadata.
 
 Two dedicated workers fetch covers outside the serialized catalog/media worker.
-Duplicate in-flight URLs (including size variants) share work; at most four HTTP callers wait for artwork,
-leaving server capacity for other requests. Each caller has a shared 20-second waiting budget for the variant and fallback;
+Duplicate in-flight URLs (including size variants) share work. Up to eight distinct
+fetches can be queued/running on the two workers, so Supersonic's five concurrent
+requests wait for real covers rather than receiving overload placeholders. Disk
+cache hits are checked before admission or negative-cache decisions. Each caller has a shared 20-second waiting budget for the variant and fallback;
 fetches use 8-second socket timeouts, a 15-second read-loop deadline and a 2 MiB
 body cap. OS DNS resolution is not a hard wall-clock timeout; a stuck resolver can
 occupy an artwork worker but cannot occupy the catalog worker. Shutdown cancels
@@ -136,16 +146,23 @@ This avoids relying on URL suffixes or sending unsupported source formats direct
 to clients. It uses existing PySide6 image codecs without a GUI/application window;
 catalog and classification logic remain independent of Qt. Supersonic's pinned Go
 client registers PNG and JPEG decoders. Missing, corrupt, denied or unsupported
-images return a neutral PNG with `X-Artwork-Status: placeholder`; successful covers
-use `available`. No specific cause is inferred from the user's earlier unknown-format
+images return HTTP 503 with `Retry-After: 30`, `Cache-Control: no-store` and
+`X-Artwork-Status: unavailable`. Only absent artwork metadata (including unavailable
+artist portraits) returns a neutral PNG with status `placeholder`; successful covers
+use `available`. Supersonic caches successfully decoded images itself, regardless
+of HTTP cache headers, so temporary failures must not masquerade as valid images. SQLite metadata
+contention returns a sanitized protocol error, never a successful placeholder.
+No specific cause is inferred from the user's earlier unknown-format
 error without its actual image bytes.
 
 The separate `artwork/` disk cache is bounded to 32 MiB/512 entries, uses hashed
 safe paths and atomic completion, recovers corrupt entries, and survives restart.
 It is additional to the media-cache limit. Transient network/server failures allow
-at most three attempts per URL per process, separated by at least 30 seconds;
-denials and invalid content are not automatically retried. Refresh the client after
-recovery; clients may cache placeholders independently.
+up to three attempts separated by at least 30 seconds, then a five-minute cooldown.
+Denials/invalid content also cool down for five minutes; retries occur only on a new
+client request. The 256-entry bounded negative cache is per URL: eviction never disables
+unrelated artwork or disk hits. No timer repeatedly fetches denied URLs. Refresh the
+client after recovery; it may retain old successful placeholders from earlier builds.
 
 Apple's [iTunes Search API](https://performance-partners.apple.com/search-api)
 documents `artworkUrl100` as a 100×100 URL, returned only when available. It does
@@ -164,7 +181,7 @@ one of five buckets: 128, 256, 400, 512 or 1024 pixels. The user-requested
 400×400 substitution is the default; a client explicitly asking for 400 also gets
 a 400×400 URL rather than a larger bucket. A failed, corrupt or unsupported
 variant falls back to the original URL within the same waiting budget; if the
-variant consumes the budget, this request returns a placeholder, and a subsequent
+variant consumes the budget, this request returns HTTP 503, and a subsequent
 request can use the fallback while the failed variant is cooling down. Valid
 images are downscaled to the requested limit but never enlarged. Variant URLs
 have distinct cache keys under the same disk/concurrency/validation limits.
@@ -287,13 +304,16 @@ rate-limit bypass, hidden result-type omission or inferred query cancellation is
 
 Each admitted HTTP metadata operation now has a 20-second deadline including its
 queue wait. Expired queued tasks skip dispatch and retain their admission slots until drained
-(to bound the executor queue even during a blocked download); running work checks the deadline
+(to bound the executor queue even during a stalled upstream request); running work checks the deadline
 before/after upstream calls and before cooldown sleeps, so it does not proceed to
 remaining categories after expiry. An in-flight urllib request cannot be forcibly
 interrupted and finishes subject to its existing network timeout. Client disconnects
 and changed queries are not uniquely identified: no global latest-query rule is
 applied across clients/tabs. Cold media downloads retain their separate existing
-longer timeout, and can still delay catalog operations on the shared core worker.
+longer timeout on the separate download worker. Shutdown cancels the shared download
+cancellation event, cancels queued download futures and waits for active downloads
+before closing runtime/cache ownership. No client disconnect cancels another user's
+shared download.
 
 Search numeric parameters are validated together before any upstream request, and
 result child counts are computed once per metadata revision instead of repeatedly
@@ -306,3 +326,28 @@ rate-spacing preservation, cached pagination and count invalidation. Real Supers
 blank-screen recovery and live search behavior still require retesting. If slow
 search persists, distinguish Search Everywhere from filtering the Albums/Artists
 pages; those client flows have materially different request fan-out.
+
+
+## Burst regressions and sanitized diagnostics
+
+An authenticated synthetic HTTP replay uses 40 album covers, five client workers
+(the inspected Supersonic limit), and a 150ms fake image-fetch delay. The previous
+four-waiter bridge returned four covers and 36 successful placeholders. The queued
+implementation returns all 40 covers with the same two fetch workers. This is a
+synthetic scheduling test, not a live CDN or Supersonic UI benchmark. Tests also cover
+warm disk hits under saturation, more than 256 failed keys, 503 instead of a cacheable
+error image, search during a blocked download, actual fake-process cancellation,
+download deduplication, range leases and rate-limiter preservation.
+
+Add `--diagnostics` to the existing bridge launch command to print a JSON aggregate
+every 30 seconds. These lines contain only allowlisted stage/outcome names, counts,
+and total/maximum milliseconds; no search terms, URLs, item IDs, headers, credentials
+or raw exceptions. Restart resets the counters. The same snapshot is available from
+the authenticated nonstandard `getBridgeDiagnostics` endpoint. Do not share other
+client logs containing authentication query parameters.
+
+Stages cover disk hits/misses, fetch/decode outcomes, artwork wait time, catalog
+queue/operation time and download outcomes. Fetch failures distinguish network,
+server, denied, TLS, invalid content and other HTTP failures without response bodies.
+The metrics describe completed operations (plus explicit timeout/busy events), not
+percentiles or a promise that every pending operation completes within its deadline.

@@ -1,8 +1,10 @@
 """Explicit local launch; never installs a runtime or signs in."""
 
 import argparse
+import json
 import os
 import signal
+import threading
 from pathlib import Path
 
 from ..model import PlayerError
@@ -32,6 +34,11 @@ def main():
         metavar="EXISTING_RUNTIME_ROOT",
         help="Explicitly start an already installed/signed-in managed runtime; close the GUI first",
     )
+    parser.add_argument(
+        "--diagnostics",
+        action="store_true",
+        help="Print aggregate timings/outcomes without queries, URLs or credentials",
+    )
     args = parser.parse_args()
     os.umask(0o077)
 
@@ -60,6 +67,13 @@ def main():
         )
         server = Server(actor, credentials, args.port, args.quality)
         print(f"Local bridge: http://127.0.0.1:{args.port} · {args.quality}")
+        if args.diagnostics:
+
+            def report():
+                while not actor.cancel.wait(30):
+                    print(json.dumps({"bridgeDiagnostics": server.metrics.snapshot()}), flush=True)
+
+            threading.Thread(target=report, daemon=True, name="bridge-diagnostics").start()
         server.serve_forever(poll_interval=0.2)
     except KeyboardInterrupt:
         pass

@@ -21,11 +21,16 @@ from ..downloader import Downloader
 from ..model import Album, Artist, PlayerError, Track
 from ..runtime import ManagedRuntime
 from ..runtime_install import RuntimeStore
+from .metrics import Metrics
 
 
 class BridgeError(Exception):
     def __init__(self, code, message):
         self.code, self.message = code, message
+
+
+class MediaMissing(BridgeError):
+    pass
 
 
 class Core:
@@ -138,7 +143,7 @@ class Core:
                     data = json.loads(row[0]) if row else {}
                 return data.get("artwork_url", "")
         except sqlite3.OperationalError:
-            return ""
+            raise BridgeError(0, "Artwork metadata temporarily unavailable; retry later") from None
 
     def request(self, function, *args, **kwargs):
         budget = 30.0
@@ -262,23 +267,11 @@ class Core:
         key = track.key(self.quality)
         hit = self.cache.get(key)
         if not hit:
-            if cached_only or not self.downloader:
-                raise BridgeError(
-                    70, "Not cached; explicitly start the configured managed runtime for downloads"
-                )
-            if self.runtime:
-                for _ in range(100):
-                    self.runtime.poll()
-                    if self.runtime.ready:
-                        break
-                    if self.cancel.wait(0.1):
-                        raise BridgeError(0, "Bridge stopping")
-                if not self.runtime.ready or self.country not in self.runtime.regions:
-                    raise BridgeError(0, "Managed backend not ready for this storefront")
+            if cached_only:
+                raise MediaMissing(70, "Media not cached")
             job = None
             try:
-                job, source, media = self.downloader.run(track, self.quality, self.cancel)
-                self.validate_quality(media)
+                job, source, media = self.download(track)
                 self.cache.put(key, source, media)
             finally:
                 if job:
@@ -296,6 +289,37 @@ class Core:
         self.pins[key] = self.pins.get(key, 0) + 1
         self.cache.protected.add(key)
         return key, stream, os.fstat(fd).st_size, media
+
+    def download(self, track):
+        # Called on the dedicated download worker; no SQLite/cache mutations here.
+        if not self.downloader:
+            raise BridgeError(
+                70, "Not cached; explicitly start the configured managed runtime for downloads"
+            )
+        if self.cancel.is_set():
+            raise BridgeError(0, "Bridge stopping")
+        if self.runtime:
+            for _ in range(100):
+                self.runtime.poll()
+                if self.runtime.ready:
+                    break
+                if self.cancel.wait(0.1):
+                    raise BridgeError(0, "Bridge stopping")
+            if not self.runtime.ready or self.country not in self.runtime.regions:
+                raise BridgeError(0, "Managed backend not ready for this storefront")
+        job, source, media = self.downloader.run(track, self.quality, self.cancel)
+        try:
+            self.validate_quality(media)
+        except Exception:
+            shutil.rmtree(job)
+            raise
+        return job, source, media
+
+    def commit_download(self, track, source, media):
+        # Commit and lease atomically with respect to other cache mutations.
+        self.validate_quality(media)
+        self.cache.put(track.key(self.quality), source, media)
+        return self.acquire(self.identity(track), cached_only=True)
 
     def validate_quality(self, media):
         if self.quality == "lossless" and media.codec not in {"alac", "flac"}:
@@ -319,10 +343,11 @@ class Core:
 
 
 class Actor:
-    """SQLite and subprocess ownership stay on a single worker, including close."""
+    """One catalog/cache owner and one bounded download worker; shared catalog limiter."""
 
     def __init__(self, factory):
         self.cancel = threading.Event()
+        self.metrics = Metrics()
         self.pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="bridge-core")
         self.metadata_pending = threading.BoundedSemaphore(4)
         future = self.pool.submit(factory, self.cancel)
@@ -339,19 +364,75 @@ class Actor:
                 self.pool.shutdown()
             raise
 
+        self.download_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="bridge-download")
+        self.download_slots = threading.BoundedSemaphore(4)
+
+    def acquire(self, identifier, cached_only=False):
+        try:
+            return self.call("acquire", identifier, True)
+        except MediaMissing:
+            if cached_only:
+                raise
+        if not self.download_slots.acquire(blocking=False):
+            self.metrics.record("download", "busy")
+            raise BridgeError(0, "Download queue busy; retry later")
+
+        def run():
+            start = time.monotonic()
+            job = None
+            try:
+                if self.cancel.is_set():
+                    raise BridgeError(0, "Bridge stopping")
+                try:
+                    return self.call("acquire", identifier, True)
+                except MediaMissing:
+                    pass
+                track = self.call("resolve", identifier, "song")
+                job, source, media = self.core.download(track)
+                result = self.call("commit_download", track, source, media)
+                self.metrics.record("download", "ok", time.monotonic() - start)
+                return result
+            except Exception:
+                self.metrics.record(
+                    "download",
+                    "cancelled" if self.cancel.is_set() else "failed",
+                    time.monotonic() - start,
+                )
+                raise
+            finally:
+                if job:
+                    shutil.rmtree(job)
+
+        try:
+            future = self.download_pool.submit(run)
+        except Exception:
+            self.download_slots.release()
+            raise
+        future.add_done_callback(lambda _: self.download_slots.release())
+        return future.result()
+
     def call(self, method, *args, **kwargs):
         return self.pool.submit(getattr(self.core, method), *args, **kwargs).result()
 
     def metadata(self, method, params, timeout=20):
         if not self.metadata_pending.acquire(blocking=False):
+            self.metrics.record("metadata_queue", "busy")
             raise BridgeError(0, "Catalog busy; retry later")
-        deadline = time.monotonic() + timeout
+        queued = time.monotonic()
+        deadline = queued + timeout
 
         def invoke():
+            started = time.monotonic()
+            self.metrics.record("metadata_queue", "ok", started - queued)
             self.core.operation_deadline = deadline
             try:
                 self.core.check_deadline()
-                return self.core.dispatch(method, params)
+                result = self.core.dispatch(method, params)
+                self.metrics.record("metadata", "ok", time.monotonic() - started)
+                return result
+            except Exception:
+                self.metrics.record("metadata", "failed", time.monotonic() - started)
+                raise
             finally:
                 self.core.operation_deadline = None
                 self.metadata_pending.release()
@@ -364,6 +445,7 @@ class Actor:
         try:
             return future.result(timeout=timeout)
         except TimeoutError:
+            self.metrics.record("metadata", "timeout", time.monotonic() - queued)
             # Keep the admission slot until the executor drains this task. Cancelling
             # a Future alone leaves its work item queued, allowing unbounded buildup.
             # Expired queued tasks skip dispatch when they reach the worker.
@@ -371,6 +453,7 @@ class Actor:
 
     def close(self):
         self.cancel.set()
+        self.download_pool.shutdown(wait=True, cancel_futures=True)
         try:
             self.pool.submit(self.core.close).result()
         finally:

@@ -16,7 +16,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
 from ..model import PlayerError
-from .artwork import Covers
+from .artwork import Covers, CoverUnavailable
 from .core import BridgeError, Core
 
 EXTENSIONS = [
@@ -294,8 +294,8 @@ class Handler(BaseHTTPRequestHandler):
             raise BridgeError(
                 0, "Transcoding and time offsets are unsupported; request raw and use byte ranges"
             )
-        key, file, size, media = self.server.actor.call(
-            "acquire", params.get("id", ""), self.command == "HEAD"
+        key, file, size, media = self.server.actor.acquire(
+            params.get("id", ""), self.command == "HEAD"
         )
         try:
             info = os.fstat(file.fileno())
@@ -398,6 +398,11 @@ class Handler(BaseHTTPRequestHandler):
             if method == "stream":
                 self.stream(params)
                 return
+            if method == "getBridgeDiagnostics":
+                self.api_response(
+                    {"bridgeDiagnostics": {"metric": self.server.metrics.snapshot()}}, fmt
+                )
+                return
             payload = static_response(method, params)
             if method == "getCoverArt":
                 payload = self.server.actor.core.cached_artwork(params.get("id", ""))
@@ -421,6 +426,15 @@ class Handler(BaseHTTPRequestHandler):
                 )
                 return
             self.api_response(payload, fmt)
+        except CoverUnavailable:
+            self.reply(
+                503,
+                extra={
+                    "Retry-After": "30",
+                    "Cache-Control": "no-store",
+                    "X-Artwork-Status": "unavailable",
+                },
+            )
         except BridgeError as exc:
             self.api_response({"error": {"code": exc.code, "message": exc.message}}, fmt)
         except (PlayerError, OSError, ValueError, TypeError):
@@ -467,7 +481,8 @@ class Server(ThreadingHTTPServer):
         self.actor, self.credentials, self.quality = actor, credentials, quality
         self.slots = threading.BoundedSemaphore(16)
         self.metadata_slots = threading.BoundedSemaphore(4)
-        self.covers = Covers(actor.core.cache.root / "artwork")
+        self.metrics = actor.metrics
+        self.covers = Covers(actor.core.cache.root / "artwork", self.metrics)
         try:
             super().__init__(("127.0.0.1", port), Handler)
         except Exception:

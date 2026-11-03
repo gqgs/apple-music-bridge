@@ -202,3 +202,29 @@ def test_three_entity_cold_latency_cache_paging_and_validation(tmp_path, monkeyp
         assert len(starts) == 3  # Deadline never bypasses catalog spacing.
     finally:
         core.close()
+
+
+def test_slow_download_does_not_hold_catalog_worker(bridge, monkeypatch):
+    server, _ = bridge
+    server.actor.call("remember", [TRACK, ALBUM, ARTIST])
+    entered, release = threading.Event(), threading.Event()
+    downloader = server.actor.core.downloader
+    original = downloader.run
+
+    def slow(*args):
+        entered.set()
+        assert release.wait(3)
+        return original(*args)
+
+    monkeypatch.setattr(downloader, "run", slow)
+    with ThreadPoolExecutor(2) as pool:
+        stream = pool.submit(request, server, "stream", {"id": "am:br:lossless:song:3"})
+        assert entered.wait(1)
+        try:
+            result = pool.submit(payload, server, "search3", {"query": "Bicep"})
+            assert result.result(timeout=1)["status"] == "ok"
+            assert not stream.done()
+        finally:
+            release.set()
+        assert stream.result()[0] == 200
+    assert any(m["stage"] == "download" and m["outcome"] == "ok" for m in server.metrics.snapshot())

@@ -117,3 +117,22 @@ def app():
 
     app = QApplication.instance() or QApplication([])
     yield app
+
+
+@pytest.fixture(autouse=True)
+def dispose_closed_qt_windows():
+    """Destroy test windows on the GUI thread, not a later worker's GC pass."""
+    yield
+    from PySide6.QtCore import QCoreApplication, QEvent
+    from PySide6.QtWidgets import QApplication
+
+    from apple_music_player.app import Window
+
+    application = QApplication.instance()
+    if application:
+        for widget in application.topLevelWidgets():
+            if isinstance(widget, Window):
+                widget.close()
+                widget.deleteLater()
+        QCoreApplication.sendPostedEvents(None, QEvent.DeferredDelete)
+        application.processEvents()

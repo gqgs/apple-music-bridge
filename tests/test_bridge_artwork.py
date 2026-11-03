@@ -397,13 +397,13 @@ def test_busy_metadata_is_not_a_successful_placeholder(bridge):
         connection.close()
 
 
-def raw_cover_response(server, identifier):
+def raw_cover_response(server, identifier, *, timeout=3):
     import http.client
     from urllib.parse import urlencode
 
     from test_bridge import KEY
 
-    conn = http.client.HTTPConnection("127.0.0.1", server.server_port, timeout=3)
+    conn = http.client.HTTPConnection("127.0.0.1", server.server_port, timeout=timeout)
     try:
         query = urlencode(
             {"apiKey": KEY, "v": "1.16.1", "c": "fixture", "f": "json", "id": identifier}
@@ -440,3 +440,22 @@ def test_cover_failure_has_one_no_store_policy(bridge, monkeypatch):
     assert status == 503
     assert headers.get_all("Cache-Control") == ["no-store"]
     assert headers.get_content_type() == "application/xml" and b"<error " in body
+
+
+@pytest.mark.parametrize(
+    "params,auth,status,reason",
+    [
+        ({"id": "artist-release:am:br:lossless:artist:999"}, True, 404, "item-unavailable"),
+        ({"id": "artist-image:am:br:lossless:artist:1"}, True, 404, "item-unavailable"),
+        ({"id": "am:br:lossless:album:2", "size": "invalid"}, True, 400, "invalid-request"),
+        ({"id": "am:br:lossless:album:2"}, False, 401, "authentication"),
+    ],
+)
+def test_cover_protocol_errors_never_look_like_successful_images(
+    bridge, params, auth, status, reason
+):
+    server, _ = bridge
+    actual, headers, body = request(server, "getCoverArt", dict(params, f="json"), auth=auth)
+    assert actual == status and headers["X-Artwork-Reason"] == reason
+    assert headers["Cache-Control"] == "no-store"
+    assert headers["Content-Type"].startswith("application/xml") and b"<error " in body

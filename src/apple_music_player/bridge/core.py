@@ -69,6 +69,20 @@ class Core:
             "CREATE TABLE IF NOT EXISTS bridge_release_checks "
             "(id TEXT PRIMARY KEY, retry_after REAL NOT NULL)"
         )
+        self.cache.db.execute(
+            "CREATE TABLE IF NOT EXISTS bridge_artist_releases "
+            "(artist TEXT NOT NULL, album TEXT NOT NULL, PRIMARY KEY(artist,album))"
+        )
+        if "reason" not in {
+            row[1] for row in self.cache.db.execute("PRAGMA table_info(bridge_release_checks)")
+        }:
+            self.cache.db.execute(
+                "ALTER TABLE bridge_release_checks ADD COLUMN reason TEXT NOT NULL "
+                "DEFAULT 'release-failed'"
+            )
+            # Old misses may have rejected valid collaborator releases. Expire
+            # only these lookup checks; bounded admission still applies.
+            self.cache.db.execute("UPDATE bridge_release_checks SET retry_after=0")
         self.cache.db.commit()
         try:
             if runtime_root is not None:
@@ -222,6 +236,19 @@ class Core:
 
     def albums(self, artist):
         values = self.remember(self.request(self.catalog.artist_albums, artist.id, artist.country))
+        # Preserve the exact lookup association even when a collaborator is the
+        # collection's primary artist. Never infer this from names/search results.
+        artist_key = self.identity(artist)
+        for album in values:
+            self.cache.db.execute(
+                "INSERT OR REPLACE INTO bridge_artist_releases VALUES (?,?)",
+                (artist_key, self.identity(album)),
+            )
+        self.cache.db.execute(
+            "DELETE FROM bridge_artist_releases WHERE rowid NOT IN "
+            "(SELECT rowid FROM bridge_artist_releases ORDER BY rowid DESC LIMIT 10000)"
+        )
+        self.cache.db.commit()
         return [album for _, group in grouped_releases(values) for album in group]
 
     def songs(self, album):

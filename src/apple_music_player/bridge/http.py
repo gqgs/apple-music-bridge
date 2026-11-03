@@ -134,6 +134,10 @@ def static_response(method, params):
         }
     if method == "tokenInfo":
         return {"tokenInfo": {"username": "bridge"}}
+    if method == "getLyrics":
+        return {"lyrics": {}}
+    if method == "getLyricsBySongId":
+        return {"lyricsList": {"structuredLyrics": []}}
     if method == "getPlaylists":
         return {"playlists": {"playlist": []}}
     if method == "getGenres":
@@ -359,6 +363,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def handle_api(self):
         fmt = "xml"
+        method = ""
         try:
             if (
                 len(self.path) > 8192
@@ -372,6 +377,7 @@ class Handler(BaseHTTPRequestHandler):
             if parsed.scheme or parsed.netloc or not match:
                 self.reply(404)
                 return
+            method = match[1]
             data = parsed.query
             if self.command == "POST":
                 if (
@@ -393,7 +399,6 @@ class Handler(BaseHTTPRequestHandler):
             fmt = params.get("f", "xml")
             if fmt not in {"xml", "json"}:
                 raise BridgeError(10, "Only XML and JSON are supported")
-            method = match[1]
             if method == "getCoverArt":
                 fmt = "xml"
             # Static extension discovery is the sole public endpoint; no catalog data.
@@ -411,6 +416,8 @@ class Handler(BaseHTTPRequestHandler):
                     {"bridgeDiagnostics": {"metric": self.server.metrics.snapshot()}}, fmt
                 )
                 return
+            if method == "getLyricsBySongId":
+                self.server.actor.core.parse(params.get("id", ""), "song")
             if method == "getArtistArtworkInfo":
                 self.api_response(
                     {"artistArtworkInfo": self.server.release_art.info(params.get("id", ""))}, fmt
@@ -479,8 +486,15 @@ class Handler(BaseHTTPRequestHandler):
                 },
             )
         except BridgeError as exc:
-            self.api_response({"error": {"code": exc.code, "message": exc.message}}, fmt)
+            if method == "getCoverArt":
+                status = {0: 503, 40: 401, 70: 404}.get(exc.code, 400)
+                self.cover_error(status, exc.code, exc.message)
+            else:
+                self.api_response({"error": {"code": exc.code, "message": exc.message}}, fmt)
         except (PlayerError, OSError, ValueError, TypeError):
+            if method == "getCoverArt":
+                self.cover_error(503, 0, "Artwork temporarily unavailable")
+                return
             self.api_response(
                 {
                     "error": {
@@ -491,7 +505,25 @@ class Handler(BaseHTTPRequestHandler):
                 fmt,
             )
         except Exception:
-            self.api_response({"error": {"code": 0, "message": "Bridge operation failed"}}, fmt)
+            if method == "getCoverArt":
+                self.cover_error(503, 0, "Artwork temporarily unavailable")
+            else:
+                self.api_response({"error": {"code": 0, "message": "Bridge operation failed"}}, fmt)
+
+    def cover_error(self, status, code, message):
+        reason = {401: "authentication", 404: "item-unavailable", 400: "invalid-request"}.get(
+            status, "metadata-unavailable"
+        )
+        extra = {
+            "X-Artwork-Status": "unavailable",
+            "X-Artwork-Reason": reason,
+            "Cache-Control": "no-store",
+        }
+        if status == 503:
+            extra["Retry-After"] = "3"
+        self.api_response(
+            {"error": {"code": code, "message": message}}, "xml", status=status, extra=extra
+        )
 
     def api_response(self, data, fmt, status=200, extra=None):
         payload = {

@@ -223,7 +223,7 @@ def test_failed_lookup_is_bounded_and_invalid_identity_cannot_schedule(bridge):
     assert 0 < service.retry_after(ID) - time.time() <= 300
     with pytest.raises(ReleaseUnavailable) as error:
         service.get(ID)
-    assert error.value.reason == "release-unavailable"
+    assert error.value.reason == "release-failed"
     assert len(service.starts) == 1
 
 
@@ -243,7 +243,9 @@ def test_artist_grid_burst_leaves_capacity_for_album_page(bridge, monkeypatch, i
             )
             for i in range(1, 6)
         ]
-        + [ready_album(id="200", artwork_url=URL.replace("fixture", "album-page"))],
+        + [
+            ready_album(id="200", artist_id="999", artwork_url=URL.replace("fixture", "album-page"))
+        ],
     )
     if not isolated:
         server.covers.background_pool.shutdown()
@@ -276,7 +278,12 @@ def test_artist_grid_burst_leaves_capacity_for_album_page(bridge, monkeypatch, i
     try:
         with ThreadPoolExecutor(6) as pool:
             jobs = [
-                pool.submit(raw_cover_response, server, f"artist-release:am:br:lossless:artist:{i}")
+                pool.submit(
+                    raw_cover_response,
+                    server,
+                    f"artist-release:am:br:lossless:artist:{i}",
+                    timeout=15,
+                )
                 for i in range(1, 6)
             ]
             assert entered.wait(3)
@@ -312,10 +319,135 @@ def test_release_miss_is_not_a_transient_retry_response(bridge):
     server, _ = bridge
     server.actor.call("remember", [ARTIST])
     with server.release_art.connection() as db:
-        db.execute("INSERT INTO bridge_release_checks VALUES (?,?)", (ID, time.time() + 300))
+        db.execute(
+            "INSERT INTO bridge_release_checks VALUES (?,?,?)",
+            (ID, time.time() + 300, "release-unavailable"),
+        )
     status, headers, body = raw_cover_response(server, COVER)
     assert status == 404
     assert headers["X-Artwork-Reason"] == "release-unavailable"
     assert headers.get_all("Cache-Control") == ["no-store"]
     assert 1 <= int(headers["Retry-After"]) <= 300
     assert b"<error " in body and not server.release_art.pending
+
+
+@pytest.mark.parametrize("deferred", [False, True])
+def test_failed_and_deferred_lookups_are_not_cached_as_absent(bridge, deferred):
+    server, _ = bridge
+    server.actor.call("remember", [ARTIST])
+
+    class Failed:
+        def artist_albums(self, *_):
+            if deferred:
+                raise CatalogDeferred(50, rate_limited=True)
+            raise RuntimeError("private response must never be returned")
+
+    server.release_art.catalog = Failed()
+    with pytest.raises(ReleaseUnavailable):
+        server.release_art.get(ID)
+    wait_jobs(server.release_art)
+    status, headers, body = raw_cover_response(server, COVER)
+    assert status == 503
+    assert headers["X-Artwork-Reason"] == ("release-deferred" if deferred else "release-failed")
+    assert 1 <= int(headers["Retry-After"]) <= (50 if deferred else 300)
+    assert b"private response" not in body
+    assert len(server.release_art.starts) == 1
+
+
+def test_legacy_checks_migrate_without_inventing_a_confirmed_miss(tmp_path):
+    from apple_music_player.bridge.http import ProtocolCore
+
+    root = tmp_path / "cache"
+    core = ProtocolCore(root, 1024)
+    core.remember([ARTIST])
+    core.cache.db.execute("DROP TABLE bridge_release_checks")
+    core.cache.db.execute(
+        "CREATE TABLE bridge_release_checks(id TEXT PRIMARY KEY,retry_after REAL)"
+    )
+    core.cache.db.execute("INSERT INTO bridge_release_checks VALUES (?,?)", (ID, time.time() + 100))
+    core.cache.db.commit()
+    core.close()
+    core = ProtocolCore(root, 1024)
+    try:
+        assert core.cached_artist(ID).id == ARTIST.id
+        assert core.cache.db.execute(
+            "SELECT retry_after FROM bridge_release_checks"
+        ).fetchone() == (0,)
+        assert core.cache.db.execute("SELECT reason FROM bridge_release_checks").fetchone() == (
+            "release-failed",
+        )
+    finally:
+        core.close()
+
+
+@pytest.mark.parametrize("title", ["Only Release - EP", "Only Release - Single"])
+def test_ep_or_single_only_artist_resolves_through_catalog_parser(bridge, monkeypatch, title):
+    from test_bridge_artwork import image_bytes
+
+    from apple_music_player.catalog import Catalog
+
+    server, _ = bridge
+    server.actor.call("remember", [ARTIST])
+    calls = []
+
+    class PublicFixture(Catalog):
+        def request(self, endpoint, **params):
+            calls.append((endpoint, params))
+            return [
+                {"wrapperType": "artist", "artistId": 1, "artistName": "Fixture"},
+                {
+                    "wrapperType": "collection",
+                    "collectionType": "Album",
+                    "artistId": 1,
+                    "artistName": "Fixture",
+                    "collectionId": 22,
+                    "collectionName": title,
+                    "artworkUrl100": URL,
+                    "releaseDate": "2020-01-01T00:00:00Z",
+                },
+            ]
+
+    server.release_art.catalog = PublicFixture()
+    transport(monkeypatch, image_bytes())
+    with pytest.raises(ReleaseUnavailable):
+        server.release_art.get(ID)
+    wait_jobs(server.release_art)
+    status, _, body = raw_cover_response(server, COVER)
+    assert status == 200 and not QImage.fromData(body).isNull()
+    assert server.release_art.get(ID).album_title == title
+    assert calls == [("lookup", {"id": "1", "country": "br", "entity": "album", "limit": 200})]
+
+
+@pytest.mark.parametrize("via_detail", [False, True])
+def test_exact_lookup_association_allows_featured_artist_release(bridge, via_detail):
+    from apple_music_player.bridge.release_artwork import ReleaseArtwork
+
+    server, _ = bridge
+    server.actor.call("remember", [ARTIST])
+    featured = ready_album(id="88", artist_id="99", album_title="Collaboration - EP")
+    # Merely finding a different primary artist's album in cache is insufficient.
+    server.actor.call("remember", [featured])
+    assert server.release_art.selection(ARTIST) is None
+
+    class Associated:
+        def artist_albums(self, identifier, country):
+            assert (identifier, country) == ("1", "br")
+            return [featured]
+
+    if via_detail:
+        server.actor.core.catalog = Associated()
+        result = payload(server, "getArtist", {"id": ID})
+        assert result["artist"]["album"][0]["id"].endswith(":88")
+    else:
+        server.release_art.catalog = Associated()
+        with pytest.raises(ReleaseUnavailable):
+            server.release_art.get(ID)
+        wait_jobs(server.release_art)
+    assert server.release_art.get(ID).id == "88"
+    server.release_art.close()
+    server.release_art = ReleaseArtwork(server.actor, catalog=Associated())
+    assert server.release_art.get(ID).id == "88"  # Association survives restart.
+    # Same spelling/metadata does not grant association to another artist ID.
+    other = replace(ARTIST, id="2")
+    server.actor.call("remember", [other])
+    assert server.release_art.selection(other) is None

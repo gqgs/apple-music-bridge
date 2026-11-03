@@ -502,3 +502,14 @@ by an authenticated HTTP regression: exactly one upstream album request, limit 5
 Clients must also stop eagerly expanding artist/song matches; otherwise the earlier
 multi-request latency returns. A live public artist-response check was unavailable
 through the web tool during this change; no new portrait endpoint or URL was guessed.
+
+
+### Optional lyrics requests
+
+The bridge has no lyrics source. `getLyrics` returns an empty `lyrics` object and
+`getLyricsBySongId` returns an empty `structuredLyrics` list, after authentication
+and typed song-ID validation. Neither request fetches catalog or lyric data.
+These use the [standard lyrics response](https://opensubsonic.netlify.app/docs/endpoints/getlyrics/)
+and [structured lyrics list](https://opensubsonic.netlify.app/docs/endpoints/getlyricsbysongid/)
+shapes, rather than reporting an unimplemented endpoint during ordinary playback.
+This is an empty-result compatibility response, not lyrics support or a new provider.

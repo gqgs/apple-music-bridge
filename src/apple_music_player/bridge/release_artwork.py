@@ -27,6 +27,7 @@ def safe_reason(reason):
             "release-unavailable",
             "release-busy",
             "release-failed",
+            "release-deferred",
             "shutdown",
             "lookup-failed",
         }
@@ -62,14 +63,23 @@ class ReleaseArtwork:
     def selection(self, artist):
         with self.connection() as db:
             rows = db.execute(
-                "SELECT data FROM bridge_metadata WHERE json_extract(data, '$.artist_id')=? "
-                "AND id LIKE ? ORDER BY json_extract(data, '$.release_date') DESC, id LIMIT 200",
-                (artist.id, f"am:{artist.country}:{self.core.quality}:album:%"),
+                "SELECT m.data,r.album FROM bridge_metadata m "
+                "LEFT JOIN bridge_artist_releases r ON r.album=m.id AND r.artist=? "
+                "WHERE (json_extract(m.data, '$.artist_id')=? OR r.album IS NOT NULL) "
+                "AND m.id LIKE ? ORDER BY json_extract(m.data, '$.release_date') "
+                "DESC,m.id LIMIT 200",
+                (
+                    self.core.identity(artist),
+                    artist.id,
+                    f"am:{artist.country}:{self.core.quality}:album:%",
+                ),
             ).fetchall()
         choices = []
-        for (raw,) in rows:
+        for raw, associated in rows:
             album = Album(**json.loads(raw))
-            if album.country != artist.country or album.artist_id != artist.id:
+            if album.country != artist.country or (
+                album.artist_id != artist.id and associated != self.core.identity(album)
+            ):
                 continue
             if not allowed_url(album.artwork_url) or album.artwork_url == BADGE_URL:
                 continue
@@ -84,12 +94,15 @@ class ReleaseArtwork:
             choices.append((released, album.id, album))
         return max(choices, key=lambda value: value[:2])[2] if choices else None
 
-    def retry_after(self, identifier):
+    def check(self, identifier):
         with self.connection() as db:
             row = db.execute(
-                "SELECT retry_after FROM bridge_release_checks WHERE id=?", (identifier,)
+                "SELECT retry_after,reason FROM bridge_release_checks WHERE id=?", (identifier,)
             ).fetchone()
-        return row[0] if row else 0
+        return row if row else (0, "release-failed")
+
+    def retry_after(self, identifier):
+        return self.check(identifier)[0]
 
     def info(self, identifier):
         artist = self.core.cached_artist(identifier)
@@ -126,9 +139,10 @@ class ReleaseArtwork:
         album = self.selection(artist)
         if album:
             return album
-        after = self.retry_after(identifier) - time.time()
+        after, reason = self.check(identifier)
+        after -= time.time()
         if after > 0:
-            raise ReleaseUnavailable("release-unavailable", after)
+            raise ReleaseUnavailable(reason, after)
         with self.lock:
             if self.stop.is_set():
                 raise ReleaseUnavailable("shutdown")
@@ -156,6 +170,7 @@ class ReleaseArtwork:
 
     def enrich(self, identifier, artist):
         delay = 300
+        reason = "release-failed"
         try:
             deadline = time.monotonic() + 30
             for _ in range(16):
@@ -163,6 +178,7 @@ class ReleaseArtwork:
                     return
                 quiet_wait = self.actor.last_metadata + 1 - time.monotonic()
                 if quiet_wait > 0:
+                    reason, delay = "release-deferred", 3
                     if self.stop.wait(min(quiet_wait, max(0, deadline - time.monotonic()))):
                         return
                     continue
@@ -170,6 +186,12 @@ class ReleaseArtwork:
                     albums = self.catalog.artist_albums(artist.id, artist.country)
                     break
                 except CatalogDeferred as exc:
+                    reason = "release-deferred"
+                    delay = (
+                        max(3, min(3600, math.ceil(exc.seconds)))
+                        if math.isfinite(exc.seconds)
+                        else 300
+                    )
                     if not 0 <= exc.seconds <= 30 or time.monotonic() + exc.seconds >= deadline:
                         return
                     if self.stop.wait(max(0.01, exc.seconds)):
@@ -178,7 +200,7 @@ class ReleaseArtwork:
                 return
             if self.stop.is_set():
                 return
-            albums = [a for a in albums if a.artist_id == artist.id and a.country == artist.country]
+            albums = [a for a in albums if a.country == artist.country]
             with self.connection() as db:
                 for album in albums[:200]:
                     identity = self.core.identity(album)
@@ -187,20 +209,31 @@ class ReleaseArtwork:
                         "INSERT OR REPLACE INTO bridge_metadata VALUES (?,?)",
                         (identity, json.dumps(asdict(album))),
                     )
+                    db.execute(
+                        "INSERT OR REPLACE INTO bridge_artist_releases VALUES (?,?)",
+                        (identifier, identity),
+                    )
+                db.execute(
+                    "DELETE FROM bridge_artist_releases WHERE rowid NOT IN "
+                    "(SELECT rowid FROM bridge_artist_releases ORDER BY rowid DESC LIMIT 10000)"
+                )
                 db.execute(
                     "DELETE FROM bridge_metadata WHERE rowid NOT IN "
                     "(SELECT rowid FROM bridge_metadata ORDER BY rowid DESC LIMIT 5000)"
                 )
             delay = 3600
+            reason = "release-unavailable"
         except Exception:
-            pass  # No provider payloads, credentials, or URLs in diagnostics.
+            reason, delay = "release-failed", 300
+            # No provider payloads, credentials, or URLs in diagnostics.
         finally:
             if not self.stop.is_set():
                 try:
                     with self.connection() as db:
                         db.execute(
-                            "INSERT OR REPLACE INTO bridge_release_checks VALUES (?,?)",
-                            (identifier, time.time() + delay),
+                            "INSERT OR REPLACE INTO bridge_release_checks "
+                            "(id,retry_after,reason) VALUES (?,?,?)",
+                            (identifier, time.time() + delay, reason),
                         )
                         db.execute(
                             "DELETE FROM bridge_release_checks WHERE id NOT IN "

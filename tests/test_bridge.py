@@ -371,3 +371,28 @@ def test_unknown_release_dates_are_not_invented(bridge, released):
         assert "year" not in result and "releaseDate" not in result
     song = server.actor.call("describe", replace(TRACK, release_date="2001-01-02T00:00:00Z"))
     assert song["year"] == 2001
+
+
+@pytest.mark.parametrize(
+    "method,params,key,value",
+    [
+        ("getLyrics", {"artist": "Fixture", "title": "Song"}, "lyrics", {}),
+        (
+            "getLyricsBySongId",
+            {"id": "am:br:lossless:song:3"},
+            "lyricsList",
+            {"structuredLyrics": []},
+        ),
+    ],
+)
+def test_absent_lyrics_are_empty_without_catalog_work(bridge, method, params, key, value):
+    server, _ = bridge
+    result = payload(server, method, params)
+    assert result["status"] == "ok" and result[key] == value
+    assert not any(m["stage"] == "metadata" for m in server.metrics.snapshot())
+    assert payload(server, method, params, auth=False)["error"]["code"] == 40
+    status, _, body = request(server, method, dict(params, f="xml"))
+    assert (
+        status == 200
+        and ET.fromstring(body).find("{http://subsonic.org/restapi}" + key) is not None
+    )

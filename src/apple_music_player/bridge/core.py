@@ -1,5 +1,6 @@
 """Serialized catalog/cache ownership; completed files are leased to HTTP workers."""
 
+import hmac
 import json
 import os
 import re
@@ -9,9 +10,9 @@ import stat
 import threading
 import time
 from collections import Counter
-from concurrent.futures import ThreadPoolExecutor, TimeoutError
+from concurrent.futures import Future, ThreadPoolExecutor, TimeoutError
 from contextlib import closing
-from dataclasses import asdict
+from dataclasses import asdict, dataclass
 from datetime import date
 from urllib.parse import quote
 
@@ -55,6 +56,7 @@ class Core:
         self.runtime = self.downloader = None
         self.pins = {}
         self.operation_deadline = None
+        self.operation_cancel = None
         self._counts = None
         self.cache.db.execute(
             "CREATE TABLE IF NOT EXISTS bridge_metadata (id TEXT PRIMARY KEY, data TEXT)"
@@ -119,6 +121,8 @@ class Core:
         ]
 
     def check_deadline(self):
+        if self.operation_cancel is not None and self.operation_cancel.is_set():
+            raise BridgeError(0, "Catalog request abandoned")
         if self.operation_deadline is not None and time.monotonic() >= self.operation_deadline:
             raise BridgeError(0, "Catalog request expired; retry when ready")
 
@@ -350,6 +354,13 @@ class Core:
             self.cache.close()
 
 
+@dataclass
+class SearchFlight:
+    future: Future
+    stopped: threading.Event
+    waiters: int = 0
+
+
 class Actor:
     """One catalog/cache owner and one bounded download worker; shared catalog limiter."""
 
@@ -374,6 +385,10 @@ class Actor:
 
         self.download_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="bridge-download")
         self.download_slots = threading.BoundedSemaphore(4)
+        self.search_pool = ThreadPoolExecutor(max_workers=4, thread_name_prefix="bridge-search")
+        self.search_lock = threading.Lock()
+        self.search_flights = {}
+        self.search_key = os.urandom(32)
 
     def acquire(self, identifier, cached_only=False):
         try:
@@ -423,6 +438,53 @@ class Actor:
         return self.pool.submit(getattr(self.core, method), *args, **kwargs).result()
 
     def metadata(self, method, params, timeout=12):
+        if method != "search3":
+            return self._metadata(method, params, timeout)
+        # HTTP authentication precedes this call. Preserve user/API-key and client
+        # identity plus every semantic parameter; ignore only per-request password/
+        # salted-token material. Never store/log a credential-bearing cache key.
+        identity = {k: v for k, v in params.items() if k not in {"p", "t", "s"}}
+        key = hmac.digest(self.search_key, json.dumps(identity, sort_keys=True).encode(), "sha256")
+        created = False
+        with self.search_lock:
+            if self.cancel.is_set():
+                raise BridgeError(0, "Bridge stopping")
+            flight = self.search_flights.get(key)
+            if flight is None:
+                if len(self.search_flights) >= 4:
+                    raise BridgeError(0, "Catalog busy; retry later")
+                stopped = threading.Event()
+                future = self.search_pool.submit(self._metadata, method, dict(params), 12, stopped)
+                flight = SearchFlight(future, stopped)
+                self.search_flights[key] = flight
+                created = True
+            elif flight.stopped.is_set():
+                raise BridgeError(0, "Catalog busy; retry later")
+            flight.waiters += 1
+        if created:
+
+            def finished(_):
+                with self.search_lock:
+                    if self.search_flights.get(key) is flight:
+                        del self.search_flights[key]
+
+            flight.future.add_done_callback(finished)
+        else:
+            self.metrics.record("search_flight", "joined")
+        try:
+            # Independent caller deadline; the shared operation has its own bounded
+            # 12s lifetime. A short-lived caller cannot cancel another waiter.
+            return flight.future.result(timeout=timeout)
+        except TimeoutError:
+            self.metrics.record("metadata", "timeout")
+            raise BridgeError(0, "Catalog busy or timed out; retry later") from None
+        finally:
+            with self.search_lock:
+                flight.waiters -= 1
+                if not flight.waiters and not flight.future.done():
+                    flight.stopped.set()
+
+    def _metadata(self, method, params, timeout=12, abandoned=None):
         if not self.metadata_pending.acquire(blocking=False):
             self.metrics.record("metadata_queue", "busy")
             raise BridgeError(0, "Catalog busy; retry later")
@@ -434,6 +496,7 @@ class Actor:
             started = time.monotonic()
             self.metrics.record("metadata_queue", "ok", started - submitted)
             self.core.operation_deadline = deadline
+            self.core.operation_cancel = abandoned
             outcome = "ok"
             try:
                 self.core.check_deadline()
@@ -449,6 +512,7 @@ class Actor:
             finally:
                 self.metrics.record("metadata_work", outcome, time.monotonic() - started)
                 self.core.operation_deadline = None
+                self.core.operation_cancel = None
 
         try:
             # Replay dispatch after deferral: completed catalog responses are cached.
@@ -460,6 +524,8 @@ class Actor:
                     raise TimeoutError
                 if self.cancel.is_set():
                     raise BridgeError(0, "Bridge stopping")
+                if abandoned is not None and abandoned.is_set():
+                    raise BridgeError(0, "Catalog request abandoned")
                 future = self.pool.submit(invoke, time.monotonic())
                 try:
                     result = future.result(timeout=remaining)
@@ -468,7 +534,7 @@ class Actor:
                     if not 0 <= exc.seconds <= 30 or time.monotonic() + delay >= deadline:
                         raise BridgeError(0, "Catalog rate limit; retry later") from None
                     started = time.monotonic()
-                    stopped = self.cancel.wait(delay)
+                    stopped = (abandoned or self.cancel).wait(delay)
                     self.metrics.record(
                         "catalog_wait",
                         "rate_limited" if exc.rate_limited else "deferred",
@@ -496,6 +562,10 @@ class Actor:
 
     def close(self):
         self.cancel.set()
+        with self.search_lock:
+            for flight in self.search_flights.values():
+                flight.stopped.set()
+        self.search_pool.shutdown(wait=True)
         self.download_pool.shutdown(wait=True, cancel_futures=True)
         try:
             self.pool.submit(self.core.close).result()

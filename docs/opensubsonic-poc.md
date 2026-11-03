@@ -441,3 +441,21 @@ plus a reliable cancellation signal (or explicit random per-view session ID and
 monotonic generation) to retire server-side work. Merely hiding old UI results or
 raising the HTTP timeout is insufficient. No new session protocol is silently
 assumed here, and no Supersonic source was copied into this project.
+
+
+Identical concurrent `search3` calls now use singleflight: one bounded shared job,
+up to four distinct jobs, and at most the existing 16 HTTP handlers. Only exact
+semantic parameters in the same authenticated identity/client scope share work;
+per-request password/token/salt differences are ignored after authentication. Keys
+are ephemeral process-keyed HMACs, never credential-bearing log/cache filenames.
+Different queries, users/API keys, client names, pagination and entity counts remain
+separate. Each waiter has its own deadline; timing out one waiter does not cancel
+others. When all waiters leave, pending work stops at the next safe boundary; a
+blocking upstream call is not forcibly interrupted. Completed/failed flights are
+removed, not retained as a result/error cache. `search_flight:joined` counts duplicate
+waiters without exposing identities or queries.
+
+The HTTP regression sends eight simultaneous identical searches and verifies one
+three-entity dispatch serves all eight. This complements a longer client debounce;
+it deliberately does not collapse the four distinct typing-prefix queries. Client
+cancellation/debounce changes are separate from this bridge PR.

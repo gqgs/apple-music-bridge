@@ -62,7 +62,7 @@ def test_busy_requests_return_explicit_responses(bridge):
         assert server.metadata_slots.acquire(False)
     try:
         assert (
-            payload(server, "search3", {"query": "Bicep"})["error"]["message"]
+            payload(server, "getArtist", {"id": "am:br:lossless:artist:1"})["error"]["message"]
             == "Catalog busy; retry later"
         )
         assert payload(server, "ping")["status"] == "ok"
@@ -401,3 +401,113 @@ def test_typing_burst_returns_protocol_responses_before_client_timeout(bridge, m
     assert all(b[2] - a[2] >= 2.99 for a, b in zip(starts, starts[1:], strict=False))
     assert {query for query, _, _ in starts} <= set(queries)
     assert payload(server, "ping")["status"] == "ok"
+
+
+def test_singleflight_waiter_timeout_does_not_cancel_other_waiter(tmp_path):
+    entered, release = threading.Event(), threading.Event()
+    calls = []
+
+    class SlowCatalog(FakeCatalog):
+        def search(self, query, country, entity="song"):
+            calls.append((query, entity))
+            entered.set()
+            assert release.wait(2)
+            return super().search(query, country, entity)
+
+    actor = Actor(
+        lambda cancel: ProtocolCore(tmp_path / "cache", 1024, catalog=SlowCatalog(), cancel=cancel)
+    )
+    try:
+        with ThreadPoolExecutor(2) as pool:
+            first = pool.submit(
+                actor.metadata,
+                "search3",
+                {"query": "bjork", "u": "a", "t": "one", "s": "salt1"},
+                0.2,
+            )
+            assert entered.wait(1)
+            second = pool.submit(
+                actor.metadata, "search3", {"query": "bjork", "u": "a", "t": "two", "s": "salt2"}, 2
+            )
+            # Both calls share work despite distinct per-request token/salt values.
+            with pytest.raises(BridgeError, match="timed out"):
+                first.result(timeout=1)
+            assert not second.done()
+            release.set()
+            assert second.result(timeout=1)["searchResult3"]["artist"]
+        assert len(calls) == 3
+        assert any(
+            m["stage"] == "search_flight" and m["count"] == 1 for m in actor.metrics.snapshot()
+        )
+    finally:
+        release.set()
+        actor.close()
+
+
+@pytest.mark.parametrize(
+    "difference", [{"query": "bjork"}, {"u": "other"}, {"albumCount": "1"}, {"c": "other-client"}]
+)
+def test_singleflight_does_not_combine_distinct_requests(tmp_path, difference):
+    entered, release = threading.Event(), threading.Event()
+    calls = []
+
+    class SlowCatalog(FakeCatalog):
+        def search(self, query, country, entity="song"):
+            calls.append((query, entity))
+            entered.set()
+            assert release.wait(2)
+            return super().search(query, country, entity)
+
+    actor = Actor(
+        lambda cancel: ProtocolCore(tmp_path / "cache", 1024, catalog=SlowCatalog(), cancel=cancel)
+    )
+    try:
+        params = {"query": "bjor", "u": "first", "c": "client"}
+        with ThreadPoolExecutor(2) as pool:
+            one = pool.submit(actor.metadata, "search3", params)
+            assert entered.wait(1)
+            two = pool.submit(actor.metadata, "search3", dict(params, **difference))
+            release.set()
+            assert one.result(timeout=1)["searchResult3"]
+            assert two.result(timeout=1)["searchResult3"]
+        assert len(calls) == 6
+        assert not any(m["stage"] == "search_flight" for m in actor.metrics.snapshot())
+    finally:
+        release.set()
+        actor.close()
+
+
+def test_identical_http_search_burst_shares_one_flight(bridge, monkeypatch):
+    import time
+
+    server, _ = bridge
+    entered, release = threading.Event(), threading.Event()
+    calls = []
+    original = server.actor.core.catalog.search
+
+    def slow(*args):
+        calls.append(args)
+        entered.set()
+        assert release.wait(3)
+        return original(*args)
+
+    monkeypatch.setattr(server.actor.core.catalog, "search", slow)
+    try:
+        with ThreadPoolExecutor(8) as pool:
+            jobs = [pool.submit(payload, server, "search3", {"query": "bjork"}) for _ in range(8)]
+            assert entered.wait(1)
+            deadline = time.monotonic() + 2
+            while time.monotonic() < deadline:
+                if any(
+                    m["stage"] == "search_flight" and m["count"] == 7
+                    for m in server.metrics.snapshot()
+                ):
+                    break
+                threading.Event().wait(0.01)
+            release.set()
+            results = [job.result(timeout=2) for job in jobs]
+        assert all(result["status"] == "ok" for result in results)
+        assert all(result == results[0] for result in results)
+        assert len(calls) == 3
+    finally:
+        release.set()

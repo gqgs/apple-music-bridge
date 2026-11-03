@@ -406,6 +406,9 @@ class Handler(BaseHTTPRequestHandler):
             payload = static_response(method, params)
             if method == "getCoverArt":
                 payload = self.server.actor.core.cached_artwork(params.get("id", ""))
+            elif method == "search3":
+                # Actor admission counts unique flights, not duplicate HTTP waiters.
+                payload = self.server.actor.metadata(method, params)
             elif payload is None:
                 if not self.server.metadata_slots.acquire(blocking=False):
                     raise BridgeError(0, "Catalog busy; retry later")

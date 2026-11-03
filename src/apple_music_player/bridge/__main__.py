@@ -59,7 +59,7 @@ def main():
             )
         )
         server = Server(actor, credentials, args.port, args.quality)
-        print(f"Local bridge: http://127.0.0.1:{args.port} · {args.quality} · placeholder artwork")
+        print(f"Local bridge: http://127.0.0.1:{args.port} · {args.quality}")
         server.serve_forever(poll_interval=0.2)
     except KeyboardInterrupt:
         pass

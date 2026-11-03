@@ -14,6 +14,7 @@ import zlib
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
+from urllib import request
 
 from ..model import PlayerError
 from .core import BridgeError, Core
@@ -200,8 +201,10 @@ class ProtocolCore(Core):
                 "albumList2": {"album": [self.describe(a) for a in albums[offset : offset + count]]}
             }
         if method == "getCoverArt":
-            self.resolve(params.get("id", ""))
-            return placeholder()
+            album = self.resolve(params.get("id", ""), "album")
+            artwork_url = album.artwork_url.replace("100x100bb.jpg","400x400bb.jpg")
+            print("artwork_url", artwork_url)
+            return request.urlopen(artwork_url).read()
         if method == "getPlaylists":
             return {"playlists": {"playlist": []}}
         raise BridgeError(0, "Endpoint not implemented by this read-only proof of concept")
@@ -391,7 +394,7 @@ class Handler(BaseHTTPRequestHandler):
                 else self.server.actor.call("dispatch", method, params)
             )
             if method == "getCoverArt":
-                self.reply(200, payload, "image/png", {"X-Artwork-Status": "placeholder"})
+                self.reply(200, payload, "image/jpeg")
                 return
             self.api_response(payload, fmt)
         except BridgeError as exc:

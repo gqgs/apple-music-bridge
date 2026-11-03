@@ -26,8 +26,8 @@ Source review against amdl v0.1.4
 - `internal/wrapper` uses `/status`, `/m3u8?adamId=…` and `/key` JSON envelopes
   matching wrapper [`56a7dcd`](https://github.com/WorldObservationLog/wrapper/blob/56a7dcd726f2c2ef1d4420d6747ba0bafe215fee/lite/lite_main.cpp).
   A successful status probe does not prove a song can download.
-- Lite finalization uses its Go media implementation; MP4Box is needed by the
-  classic path, not evidence of this lite failure. The player still requires
+- Pinned amdl audio finalization uses native Go defragmentation, tagging and ALAC
+  repair; MP4Box is not required for the supported normal audio path. The player requires
   ffprobe for actual format verification and mpv for playback.
 
 Tests use source-shaped failure transcripts, both output streams, oversized and

@@ -42,7 +42,11 @@ def test_album_search_contract_and_lookup(monkeypatch):
 
     monkeypatch.setattr(catalog, "request", request)
     albums = catalog.search("daughter if you leave", "gb", "album")
-    assert albums == [Album("gb", "12345", "If You Leave — Daughter")]
+    assert albums == [
+        Album(
+            "gb", "12345", "If You Leave — Daughter", artist="Daughter", album_title="If You Leave"
+        )
+    ]
     assert calls[-1] == (
         "search",
         {
@@ -50,7 +54,7 @@ def test_album_search_contract_and_lookup(monkeypatch):
             "country": "gb",
             "media": "music",
             "entity": "album",
-            "limit": 50,
+            "limit": 200,
         },
     )
     tracks = catalog.album(albums[0].id, albums[0].country)
@@ -88,7 +92,7 @@ def test_album_ui_open_tracks_queue_and_stale_results(app, tmp_path, monkeypatch
     window.result_list.setCurrentRow(0)
     window.selected_button.click()
     wait_until(lambda: (window.tick(), window.result_list.count() == 2)[1])
-    assert "If You Leave — Daughter" in window.catalog_status.text()
+    assert window.album_header.title.text() == "If You Leave"
     assert window.all_button.text() == "Queue album"
     window.all_button.click()
     assert [entry.track.id for entry in window.controller.queue] == ["12346", "12347"]
@@ -203,6 +207,7 @@ def test_qt_backend_storefront_choice_search_and_queue(app, tmp_path, monkeypatc
         return [ALBUM] if endpoint == "search" else [ALBUM, *SONGS]
 
     monkeypatch.setattr(window.catalog, "request", request)
+    window.pages.setCurrentIndex(1)
     window.show()
     window.tick()
     app.processEvents()
@@ -259,3 +264,124 @@ def test_fresh_storefront_uses_only_unambiguous_backend_region(app, tmp_path, mo
         assert window.country.text() == "br"
     finally:
         window.close()
+
+
+def test_faye_album_query_uses_full_public_limit_and_direct_lookup(monkeypatch):
+    from apple_music_player.model import parse_url
+
+    catalog = Catalog()
+    calls = []
+
+    def request(endpoint, **params):
+        calls.append((endpoint, params))
+        return [dict(ALBUM, collectionId=n, collectionName=f"Fixture {n}") for n in range(60)]
+
+    monkeypatch.setattr(catalog, "request", request)
+    assert len(catalog.search("faye webster Atlanta Millionaires Club", "br", "album")) == 60
+    assert calls[-1][1]["limit"] == 200
+    assert calls[-1][1]["term"] == "faye webster Atlanta Millionaires Club"
+    assert calls[-1][1]["country"] == "br"
+    assert parse_url("https://music.apple.com/br/album/atlanta-millionaires-club/1452886606") == (
+        "br",
+        "album",
+        "1452886606",
+    )
+
+
+def test_album_order_filters_other_collections_and_preserves_unnumbered(monkeypatch):
+    catalog = Catalog()
+    rows = [
+        dict(SONGS[0], trackId=3, discNumber=2, trackNumber=1),
+        dict(SONGS[0], trackId=2, discNumber=1, trackNumber=2),
+        dict(SONGS[0], trackId=1, discNumber=1, trackNumber=1),
+        dict(SONGS[0], trackId=9, collectionId=999),
+    ]
+    monkeypatch.setattr(catalog, "request", lambda *a, **k: rows)
+    assert [t.id for t in catalog.album("12345", "br")] == ["1", "2", "3"]
+    rows[0].pop("trackNumber")
+    assert [t.id for t in catalog.album("12345", "br")] == ["3", "2", "1"]
+
+
+def test_play_album_ui_loading_empty_error_and_repeat(app, tmp_path, monkeypatch):
+    from conftest import wait_until
+
+    window = Window(tmp_path / "cache")
+    monkeypatch.setattr(window.controller, "tick", lambda: None)
+    monkeypatch.setattr(window.catalog, "request", lambda *a, **k: [ALBUM, *SONGS])
+    old = Track("br", "999", "Previous")
+    window.controller.add(old, "lossless")
+    try:
+        assert not window.play_album_button.isEnabled()
+        window.open_album(Album("br", "12345", "Fixture album"))
+        assert not window.play_album_button.isEnabled()
+        wait_until(lambda: (window.tick(), window.play_album_button.isEnabled())[1])
+        window.play_album_button.click()
+        window.play_album_button.click()
+        assert [e.track.id for e in window.controller.queue] == ["12346", "12347"]
+        window.all_button.click()
+        assert len(window.controller.queue) == 2  # Append deduplicates; it does not restart.
+        window.open_album(Album("br", "987", "Next album"))
+        assert not window.play_album_button.isEnabled()
+        window.play_album()
+        assert len(window.controller.queue) == 2
+        wait_until(lambda: (window.tick(), window.catalog_future is None)[1])
+        assert not window.play_album_button.isEnabled()  # Empty album lookup.
+
+        def fail(*a, **k):
+            raise PlayerError("Fixture catalog failure")
+
+        monkeypatch.setattr(window.catalog, "request", fail)
+        window.open_album(Album("br", "12345", "Fixture album"))
+        wait_until(lambda: (window.tick(), window.catalog_future is None)[1])
+        assert not window.play_album_button.isEnabled()
+        assert "failure" in window.catalog_status.text()
+        assert [e.track.id for e in window.controller.queue] == ["12346", "12347"]
+    finally:
+        window.close()
+
+
+def test_album_artist_duration_and_multidisc_rows(monkeypatch):
+    catalog = Catalog()
+    collection = dict(ALBUM, artistName="Various Artists", artistId=99)
+    rows = [
+        collection,
+        dict(
+            SONGS[0],
+            artistName="Guest A",
+            artistId=10,
+            trackId=1,
+            trackName="Finale",
+            trackNumber=1,
+            discNumber=2,
+            trackTimeMillis=3661000,
+        ),
+        dict(
+            SONGS[1],
+            artistName="Guest B",
+            artistId=11,
+            trackId=2,
+            trackName="Opening",
+            trackNumber=1,
+            discNumber=1,
+            trackTimeMillis=209900,
+        ),
+    ]
+    monkeypatch.setattr(catalog, "request", lambda *a, **k: rows)
+    tracks = catalog.album("12345", "br")
+    assert [t.id for t in tracks] == ["2", "1"]
+    assert tracks[0].album_row_title(True) == "1.01  Opening — Various Artists"
+    assert tracks[1].album_row_title(True) == "2.01  Finale — Various Artists"
+    assert [t.duration_label for t in tracks] == ["3:29", "1:01:01"]
+    assert tracks[0].artist == "Guest B" and tracks[0].album.artist == "Various Artists"
+    assert tracks[0].album.artist_id == "99"
+    collection.pop("artistId")
+    assert catalog.album("12345", "br")[0].album.artist_id == ""
+    rows.remove(collection)
+    assert catalog.album("12345", "br")[0].album_row_title(True) == "1.01  Opening — Guest B"
+
+
+@pytest.mark.parametrize("duration", [None, "unknown", "123000", -10, 0, True, 2.5])
+def test_missing_or_invalid_duration_is_not_invented(duration):
+    track = Catalog().tracks([dict(SONGS[0], trackTimeMillis=duration)], "br")[0]
+    assert track.duration_label == "—"
+    assert track.album_row_title() == "—  Winter — Daughter"

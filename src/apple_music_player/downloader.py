@@ -222,37 +222,8 @@ def probe(path, executable="ffprobe"):
         ) from None
 
 
-def job_config(output, country):
-    # Fresh config, not a copy of the user's existing configuration or secrets.
-    return {
-        "storefront": country,
-        "get-m3u8-from-device": True,
-        "get-m3u8-mode": "all",
-        "decrypt-m3u8-port": "127.0.0.1:10020",
-        "get-m3u8-port": "127.0.0.1:20020",
-        "exit-on-error": True,
-        "alac-max": 192000,
-        "atmos-max": 2768,
-        "max-memory-limit": 256,
-        "limit-max": 200,
-        "alac-save-folder": str(output),
-        "atmos-save-folder": str(output),
-        "aac-save-folder": str(output),
-        "mv-save-folder": str(output),
-        "album-folder-format": "{AlbumId}",
-        "song-file-format": "{SongId}",
-        "artist-folder-format": "",
-        "embed-lrc": False,
-        "save-lrc-file": False,
-        "embed-cover": False,
-        "save-artist-cover": False,
-        "save-animated-artwork": False,
-        "convert-after-download": False,
-    }
-
-
 def lite_job_config(output, country):
-    # v0.1.4's nested schema, not the July classic flat schema.
+    # Pinned v0.1.4 nested schema.
     return {
         "general": {
             "lite-server": LITE_ENDPOINT,
@@ -286,8 +257,8 @@ def lite_job_config(output, country):
 
 
 class Downloader:
-    def __init__(self, binary, staging, stage_limit=2 * 1024**3, timeout=900, backend="classic"):
-        if backend not in {"classic", "lite"}:
+    def __init__(self, binary, staging, stage_limit=2 * 1024**3, timeout=900, backend="lite"):
+        if backend != "lite":
             raise PlayerError("Unknown downloader backend.")
         self.backend = backend
         self.binary = binary
@@ -309,22 +280,22 @@ class Downloader:
     def run(self, track, quality, cancel):
         binary = shutil.which(self.binary)
         if not binary:
-            raise PlayerError("Downloader not found. Set its absolute executable path in Settings.")
+            raise PlayerError(
+                "Downloader not found. Check the managed installation in Backend setup."
+            )
         job = Path(tempfile.mkdtemp(prefix="job-", dir=self.staging))
         output = job / "output"
         output.mkdir()
         config = job / "config.yaml"
         # JSON is valid YAML and avoids a YAML parser dependency.
-        make_config = lite_job_config if self.backend == "lite" else job_config
-        config.write_text(json.dumps(make_config(output, track.country)))
+        config.write_text(json.dumps(lite_job_config(output, track.country)))
         config.chmod(0o600)
         process = None
         try:
             if cancel.is_set():
                 raise PlayerError("Download cancelled.")
             args = [str(Path(binary).absolute()), "--json"]
-            if self.backend == "lite":
-                args.extend(["--config", str(config)])
+            args.extend(["--config", str(config)])
             if quality == "atmos":
                 args.append("--atmos")
             args.append(track.url)

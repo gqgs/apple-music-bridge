@@ -2,11 +2,12 @@ import json
 import os
 import re
 import sys
+import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QTimer
-from PySide6.QtGui import QIcon
+from PySide6.QtCore import QSize, Qt, QTimer, QUrl
+from PySide6.QtGui import QDesktopServices, QIcon, QPixmap
 from PySide6.QtWidgets import (
     QApplication,
     QComboBox,
@@ -21,14 +22,19 @@ from PySide6.QtWidgets import (
     QMainWindow,
     QMessageBox,
     QPushButton,
+    QScrollArea,
     QSlider,
+    QTabWidget,
     QVBoxLayout,
     QWidget,
 )
 
+from .artwork import BADGE_URL, Artwork, allowed_url
+from .browsing import AlbumCard, AlbumHeader, Shelf, TrackRowDelegate, placeholder, store_link
 from .cache import Cache
-from .catalog import Catalog, CatalogDeferred
+from .catalog import Catalog, CatalogDeferred, SearchResults, public_text, recent_releases
 from .controller import Controller
+from .library import History
 from .model import Album, PlayerError, Track, parse_url
 from .playback import Mpv
 
@@ -45,19 +51,37 @@ class Window(QMainWindow):
         self.setWindowTitle("Apple Music Player")
         self.setWindowIcon(application_icon())
         self.resize(980, 740)
+        custom_root = root is not None
         root = (
             root
             or Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")) / "apple-music-player"
         )
         self.cache = Cache(root, 10 * GIB)
+        data_root = (
+            self.cache.root.parent / (self.cache.root.name + "-library")
+            if custom_root
+            else Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local/share"))
+            / "apple-music-player"
+            / "library"
+        )
+        self.history = History(data_root)
+        self.artwork = Artwork(self.cache.root / "artwork")
+        self.home_revision = None
+        self.release_artists = []
+        self.release_results = []
+        self.release_context = None
+        self.release_checked = {}
+        self.detail_card = None
+        self.now_card = None
+        self.now_album = None
+        self.badge_context = None
         self.settings_path = self.cache.root / "settings.json"
         if self.settings_path.is_symlink():
             raise PlayerError("Settings file must not be a symlink.")
         self.settings = {
-            "downloader": "apple-music-downloader",
             "device": "auto",
             "limit": 10,
-            "backend": "classic",
+            "backend": "lite",
             "storefront": "br",
         }
         try:
@@ -70,10 +94,9 @@ class Window(QMainWindow):
         if not re.fullmatch(r"[a-z]{2}", self.settings["storefront"]):
             self.settings["storefront"] = "br"
         self.cache.limit = max(1, min(1024, self.settings["limit"])) * GIB
-        self.controller = Controller(
-            self.cache, Mpv(), self.settings["downloader"], self.settings["device"]
-        )
-        self.controller.backend = "lite" if self.settings.get("backend") == "lite" else "classic"
+        self.controller = Controller(self.cache, Mpv(), device=self.settings["device"])
+        self.controller.on_played = self.history.record
+        self.legacy_setup = self.settings.get("backend") != "lite"
         self.setup_service = None
         self.closing = False
         self.startup_attempted = False
@@ -87,6 +110,9 @@ class Window(QMainWindow):
         self.catalog_timer.timeout.connect(self.resume_catalog)
         self.generation = 0
         self.results = []
+        self.last_search_diagnostics = None
+        self.displayed_search_diagnostics = None
+        self.album_tracks = ()
         self.pending_result_kind = "songs"
         self.pending_album_title = ""
         self.rendered_queue = None
@@ -105,12 +131,57 @@ class Window(QMainWindow):
         self.backend_status.setTextFormat(Qt.PlainText)
         self.backend_status.setWordWrap(True)
         layout.addWidget(self.backend_status)
+        artwork_row = QHBoxLayout()
+        self.artwork_status = QLabel()
+        self.artwork_status.setWordWrap(True)
+        self.artwork_status.hide()
+        artwork_row.addWidget(self.artwork_status, 1)
+        self.artwork_retry = QPushButton("Retry artwork")
+        self.artwork_retry.hide()
+        self.artwork_retry.clicked.connect(self.artwork.retry_failed)
+        artwork_row.addWidget(self.artwork_retry)
+        layout.addLayout(artwork_row)
+        root_layout = layout
+        self.pages = QTabWidget()
+        root_layout.addWidget(self.pages, 1)
+        home = QWidget()
+        home_layout = QVBoxLayout(home)
+        home_title = QLabel("Home · on this device")
+        home_title.setStyleSheet("font-size: 24px; font-weight: 600")
+        home_layout.addWidget(home_title)
+        home_layout.addWidget(QLabel("Recently played albums · this device only"))
+        self.recent_shelf = Shelf(self.artwork, self.open_album)
+        self.recent_shelf.focused.connect(self.set_badge_context)
+        home_layout.addWidget(self.recent_shelf)
+        home_layout.addWidget(QLabel("Recent releases from artists you’ve played"))
+        self.release_shelf = Shelf(self.artwork, self.open_album)
+        self.release_shelf.focused.connect(self.set_badge_context)
+        home_layout.addWidget(self.release_shelf)
+        self.release_status = QLabel(
+            "Last 90 days · limited public catalog; dates may include reissues"
+        )
+        self.release_status.setWordWrap(True)
+        home_layout.addWidget(self.release_status)
+        actions = QHBoxLayout()
+        self.button(actions, "Refresh releases", self.refresh_releases)
+        self.button(actions, "Clear local history", self.clear_history)
+        home_layout.addLayout(actions)
+        self.home_scroll = QScrollArea()
+        self.home_scroll.setWidgetResizable(True)
+        self.home_scroll.setWidget(home)
+        self.pages.addTab(self.home_scroll, "Home")
+        search_page = QWidget()
+        search_scroll = QScrollArea()
+        search_scroll.setWidgetResizable(True)
+        search_scroll.setWidget(search_page)
+        self.pages.addTab(search_scroll, "Search")
+        layout = QVBoxLayout(search_page)
         catalog_note = QLabel("Search public iTunes metadata · Apple Music availability may differ")
         layout.addWidget(catalog_note)
         search_row = QHBoxLayout()
         self.search = QLineEdit()
         self.search.setPlaceholderText("Search songs or artists")
-        self.search.textChanged.connect(self.invalidate_search)
+        self.search.textChanged.connect(self.search_input_changed)
         self.search.returnPressed.connect(self.search_catalog)
         search_row.addWidget(self.search, 1)
         self.search_kind = QComboBox()
@@ -144,13 +215,38 @@ class Window(QMainWindow):
         layout.addLayout(storefront_row)
         self.catalog_status = QLabel("Search, browse a result's album, or paste a URL below.")
         self.catalog_status.setTextFormat(Qt.PlainText)
-        layout.addWidget(self.catalog_status)
+        self.catalog_status.setWordWrap(True)
+        diagnostics_row = QHBoxLayout()
+        diagnostics_row.addWidget(self.catalog_status, 1)
+        self.copy_search_button = self.button(
+            diagnostics_row, "Copy search diagnostics", self.copy_search_diagnostics
+        )
+        self.copy_search_button.setEnabled(False)
+        self.copy_search_button.setToolTip(
+            "Copy the last completed query and public result IDs/titles. "
+            "No account data or raw response."
+        )
+        layout.addLayout(diagnostics_row)
+        self.album_header = AlbumHeader(self.artwork)
+        layout.addWidget(self.album_header)
         self.result_list = QListWidget()
+        self.result_list.setItemDelegate(TrackRowDelegate(self.result_list))
         self.result_list.itemDoubleClicked.connect(lambda _: self.add_selected())
-        layout.addWidget(self.result_list, 2)
-        result_buttons = QHBoxLayout()
-        self.button(result_buttons, "Browse album", self.browse_album)
+        self.result_list.setIconSize(QSize(100, 100))
+        self.result_list.currentRowChanged.connect(self.show_selected_album)
+        results_row = QHBoxLayout()
+        results_row.addWidget(self.result_list, 1)
+        self.detail_host = QVBoxLayout()
+        results_row.addLayout(self.detail_host)
+        layout.addLayout(results_row, 2)
+        result_buttons = self.result_buttons = QHBoxLayout()
+        self.browse_button = self.button(result_buttons, "Browse album", self.browse_album)
         self.selected_button = self.button(result_buttons, "Queue selected", self.add_selected)
+        self.play_album_button = self.button(result_buttons, "Play album", self.play_album)
+        self.play_album_button.setToolTip(
+            "Replace the current queue and play this album from the first track."
+        )
+        self.play_album_button.setEnabled(False)
         self.all_button = self.button(result_buttons, "Queue all results", self.add_all)
         result_buttons.addStretch()
         self.quality = QComboBox()
@@ -165,6 +261,9 @@ class Window(QMainWindow):
         url_row.addWidget(self.url)
         self.button(url_row, "Open URL", self.add_url)
         layout.addLayout(url_row)
+        queue_page = QWidget()
+        self.pages.addTab(queue_page, "Queue")
+        layout = QVBoxLayout(queue_page)
         layout.addWidget(QLabel("Queue · downloads current track and prefetches one next track"))
         self.queue_list = QListWidget()
         layout.addWidget(self.queue_list, 1)
@@ -176,6 +275,33 @@ class Window(QMainWindow):
         self.usage = QLabel()
         queue_buttons.addWidget(self.usage)
         layout.addLayout(queue_buttons)
+        layout = root_layout
+        # One badge for the whole visible layout, outside scrolling content and directly
+        # between catalog artwork and now playing, with the focused album as destination.
+        self.badge_album = None
+        self.badge_strip = QWidget()
+        badge_row = QHBoxLayout(self.badge_strip)
+        badge_row.setContentsMargins(8, 4, 8, 4)
+        self.badge_caption = QLabel()
+        self.badge_caption.setTextFormat(Qt.PlainText)
+        self.badge_caption.setWordWrap(True)
+        badge_row.addWidget(self.badge_caption, 1)
+        self.store_badge = QPushButton()
+        self.store_badge.setObjectName("itunesStoreBadge")
+        self.store_badge.setIconSize(QSize(120, 40))
+        self.store_badge.setFixedSize(140, 48)
+        self.store_badge.clicked.connect(self.open_badge_album)
+        badge_row.addWidget(self.store_badge)
+        layout.addWidget(self.badge_strip)
+        self.badge_strip.hide()
+        footer = QHBoxLayout()
+        self.now_host = QVBoxLayout()
+        footer.addLayout(self.now_host)
+        now_text = QVBoxLayout()
+        footer.addLayout(now_text, 1)
+        layout.addLayout(footer)
+        footer_root = layout
+        layout = now_text
         self.now = QLabel("Nothing playing")
         self.now.setTextFormat(Qt.PlainText)
         self.now.setStyleSheet("font-size: 18px; font-weight: 600")
@@ -188,6 +314,7 @@ class Window(QMainWindow):
         self.fallback = QLabel("")
         self.fallback.setStyleSheet("color: #c77b00; font-weight: 600")
         layout.addWidget(self.fallback)
+        layout = footer_root
         transport = QHBoxLayout()
         self.pause_button = self.button(transport, "Play / pause", self.toggle_pause)
         self.button(transport, "Next", self.controller.next)
@@ -205,7 +332,188 @@ class Window(QMainWindow):
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.tick)
         self.timer.start(100)
+        self.pages.currentChanged.connect(self.navigation_changed)
+        self.update_home()
         QTimer.singleShot(0, self.start_saved_backend)
+
+    def navigation_changed(self, index):
+        self.badge_context = None
+        self.invalidate_search()
+        self.release_context = None
+        if index == 0:
+            self.refresh_releases()
+
+    def open_album(self, album):
+        if not album:
+            return
+        self.country.setText(album.country)
+        self.pages.setCurrentIndex(1)
+        self.request_catalog(self.catalog.album, album.id, album.country, album_title=album.title)
+
+    def show_selected_album(self, row):
+        self.badge_context = self.album_header.album
+        if self.detail_card:
+            self.detail_host.removeWidget(self.detail_card)
+            self.detail_card.deleteLater()
+            self.detail_card = None
+        if self.album_header.album:
+            return
+        if 0 <= row < len(self.results):
+            item = self.results[row]
+            album = item if isinstance(item, Album) else item.album
+            if album:
+                self.badge_context = album
+                self.detail_card = AlbumCard(album, self.artwork, self.open_album)
+                self.detail_card.focused.connect(self.set_badge_context)
+                self.detail_host.addWidget(self.detail_card)
+
+    def show_album_header(self):
+        album = self.album_tracks[0].album if self.album_tracks else None
+        self.album_header.set_album(album, len(self.album_tracks))
+        self.browse_button.setVisible(album is None)
+        if album:
+            self.album_header.actions.addWidget(self.play_album_button)
+            self.album_header.actions.addWidget(self.all_button)
+        else:
+            self.result_buttons.insertWidget(2, self.play_album_button)
+            self.result_buttons.insertWidget(3, self.all_button)
+        self.play_album_button.setVisible(album is not None)
+
+    def set_badge_context(self, album):
+        self.badge_context = album
+        self.refresh_artwork()
+
+    def open_badge_album(self):
+        if self.badge_album:
+            QDesktopServices.openUrl(QUrl(store_link(self.badge_album)))
+
+    def refresh_artwork(self):
+        candidates = []
+        if self.pages.currentIndex() == 0:
+            candidates = [card.album for card in self.recent_shelf.cards + self.release_shelf.cards]
+        elif self.pages.currentIndex() == 1:
+            if self.album_header.album:
+                candidates.append(self.album_header.album)
+            if self.detail_card:
+                candidates.append(self.detail_card.album)
+            candidates.extend(
+                item if isinstance(item, Album) else item.album for item in self.results
+            )
+        if self.now_card:
+            candidates.append(self.now_card.album)
+        if self.badge_context in candidates:
+            candidates.insert(0, self.badge_context)
+        self.badge_album = next((a for a in candidates if a and allowed_url(a.artwork_url)), None)
+        badge = self.artwork.get(BADGE_URL) if self.badge_album else None
+        badge_ready = badge is not None and not badge.isNull()
+        self.badge_strip.setVisible(badge_ready)
+        if badge_ready:
+            self.store_badge.setIcon(QIcon(QPixmap.fromImage(badge)))
+            self.store_badge.setAccessibleName("View " + self.badge_album.title + " in iTunes")
+            self.badge_caption.setText("Album artwork · Store link: " + self.badge_album.title)
+        if self.pages.currentIndex() == 0:
+            self.recent_shelf.refresh()
+            self.release_shelf.refresh()
+        elif self.pages.currentIndex() == 1:
+            if self.album_header.album:
+                self.album_header.refresh()
+            if self.detail_card:
+                self.detail_card.refresh()
+            if self.album_header.album:
+                pass  # Album track rows deliberately have no repeated cover artwork.
+            elif badge_ready:
+                for index, item in enumerate(self.results):
+                    image = self.artwork.get(item.artwork_url)
+                    if not image.isNull() and index < self.result_list.count():
+                        self.result_list.item(index).setIcon(QIcon(QPixmap.fromImage(image)))
+            else:
+                for index in range(self.result_list.count()):
+                    self.result_list.item(index).setIcon(placeholder())
+        if self.now_card:
+            self.now_card.refresh()
+
+    def update_home(self):
+        context = (self.history.revision, self.country.text().lower())
+        if context == self.home_revision:
+            return
+        self.home_revision = context
+        self.recent_shelf.set_albums(
+            self.history.albums(context[1]),
+            "Play an album track to see it here. History is local to this device/storefront.",
+        )
+        self.release_shelf.set_albums([], "No recent releases loaded for this storefront.")
+        if self.pending_result_kind == "releases":
+            self.invalidate_search()
+        self.release_context = None
+        if self.pages.currentIndex() == 0:
+            QTimer.singleShot(0, self.refresh_releases)
+
+    def clear_history(self):
+        self.history.clear()
+        self.release_checked.clear()
+        self.release_context = None
+        self.release_artists = []
+        if self.pending_result_kind == "releases":
+            self.invalidate_search()
+        self.update_home()
+
+    def refresh_releases(self):
+        if self.closing or self.pages.currentIndex() != 0 or self.release_context:
+            return
+        country = self.country.text().lower()
+        artists = tuple(self.history.artists(country))
+        if not artists:
+            self.release_shelf.set_albums(
+                [], "Play tracks with catalog artist metadata to discover releases."
+            )
+            return
+        key = (country, artists)
+        cached = self.release_checked.get(key)
+        if cached and time.monotonic() - cached[0] < 3600:
+            self.release_shelf.set_albums(cached[1], "No returned releases in the last 90 days.")
+            return
+        self.release_context = (country, artists, self.history.revision)
+        self.release_artists = list(artists)
+        self.release_results = []
+        self.release_status.setText(
+            "Loading recent releases · up to five played artists, with request spacing"
+        )
+        self.next_release_artist()
+
+    def next_release_artist(self):
+        if not self.release_context:
+            return
+        if self.release_artists:
+            self.request_catalog(
+                self.catalog.artist_albums,
+                self.release_artists[0],
+                self.release_context[0],
+                result_kind="releases",
+            )
+        else:
+            albums = recent_releases(self.release_results)
+            if len(self.release_checked) >= 8:
+                self.release_checked.clear()
+            self.release_checked[self.release_context[:2]] = (time.monotonic(), albums)
+            self.release_shelf.set_albums(albums, "No returned releases in the last 90 days.")
+            self.release_status.setText(
+                "Last 90 days · limited catalog; dates may include reissues · refreshed hourly"
+            )
+            self.release_context = None
+            self.catalog_request = None
+
+    def receive_releases(self, albums):
+        expected = self.release_context
+        if (
+            not expected
+            or self.pages.currentIndex() != 0
+            or expected[0] != self.country.text().lower()
+            or expected[2] != self.history.revision
+        ):
+            return
+        self.release_results.extend(albums)
+        self.release_artists.pop(0)
+        self.next_release_artist()
 
     def ensure_setup_service(self):
         from .setup_ui import SetupService
@@ -217,7 +525,7 @@ class Window(QMainWindow):
 
     def start_saved_backend(self):
         # Exactly once per window startup; never called from the polling loop.
-        if self.closing or self.startup_attempted or self.controller.backend != "lite":
+        if self.closing or self.startup_attempted or self.legacy_setup:
             return
         self.startup_attempted = True
         try:
@@ -240,7 +548,33 @@ class Window(QMainWindow):
         row.addWidget(button)
         return button
 
+    def search_input_changed(self):
+        self.invalidate_search()
+        if self.results:
+            self.catalog_status.setText(
+                "Search text changed · previous results remain displayed. Press Search to update."
+            )
+
+    def copy_search_diagnostics(self):
+        if not self.last_search_diagnostics:
+            return
+        report = {
+            "schema": "apple-music-player-search-v1",
+            "current_input": {
+                "query": public_text(self.search.text(), 200),
+                "storefront": public_text(self.country.text(), 2),
+                "entity": self.search_kind.currentData(),
+            },
+            "currently_displaying_this_search": self.displayed_search_diagnostics
+            is self.last_search_diagnostics,
+            "catalog_request_pending": bool(self.catalog_future or self.catalog_timer.isActive()),
+            "last_completed_search": self.last_search_diagnostics,
+        }
+        QApplication.clipboard().setText(json.dumps(report, ensure_ascii=False, indent=2))
+
     def invalidate_search(self, *_, clear=False):
+        self.album_tracks = ()
+        self.play_album_button.setEnabled(False)
         self.generation += 1
         self.catalog_timer.stop()
         self.catalog_request = None
@@ -249,6 +583,8 @@ class Window(QMainWindow):
             self.catalog_future = None
         if clear:
             self.results = []
+            self.displayed_search_diagnostics = None
+            self.show_album_header()
             self.result_list.clear()
             self.selected_button.setEnabled(False)
             self.all_button.setEnabled(False)
@@ -269,6 +605,7 @@ class Window(QMainWindow):
         self.catalog_status.setText("Loading catalog…")
 
     def search_catalog(self):
+        self.pages.setCurrentIndex(1)
         if self.search.text().strip():
             self.remember_storefront()
             self.request_catalog(
@@ -288,6 +625,9 @@ class Window(QMainWindow):
             self.controller.error = "Could not save storefront. Check settings permissions."
 
     def storefront_changed(self):
+        self.release_context = None
+        self.release_artists = []
+        self.home_revision = None
         self.invalidate_search(clear=True)
         self.remember_storefront()
         self.show_storefront()
@@ -325,12 +665,7 @@ class Window(QMainWindow):
             item = self.results[row]
             album_id = item.id if isinstance(item, Album) else item.album_id
             if album_id:
-                self.request_catalog(
-                    self.catalog.album,
-                    album_id,
-                    item.country,
-                    album_title=item.title if isinstance(item, Album) else "Album tracks",
-                )
+                self.open_album(item if isinstance(item, Album) else item.album)
 
     def add_selected(self):
         row = self.result_list.currentRow()
@@ -339,6 +674,14 @@ class Window(QMainWindow):
                 self.browse_album()
             else:
                 self.controller.add(self.results[row], self.quality.currentData())
+
+    def play_album(self):
+        if self.album_tracks and self.controller.play_album(
+            self.album_tracks, self.quality.currentData()
+        ):
+            self.catalog_status.setText(
+                "Album starts from its first track · previous queue replaced"
+            )
 
     def add_all(self):
         for track in self.results:
@@ -405,7 +748,6 @@ class Window(QMainWindow):
         dialog = QDialog(self)
         dialog.setWindowTitle("Player settings")
         form = QFormLayout(dialog)
-        downloader = QLineEdit(self.controller.downloader)
         device = QLineEdit(self.controller.device)
         device.setPlaceholderText("auto, or alsa/hdmi:CARD=HDMI,DEV=3")
         limit = QDoubleSpinBox()
@@ -413,7 +755,6 @@ class Window(QMainWindow):
         limit.setRange(1, 1024)
         limit.setValue(self.cache.limit / GIB)
         limit.setSuffix(" GiB")
-        form.addRow("Downloader executable", downloader)
         form.addRow("mpv audio device", device)
         form.addRow(
             QLabel(
@@ -425,7 +766,7 @@ class Window(QMainWindow):
         form.addRow(
             QLabel(
                 "Plus up to 2 GiB staging per download; brief overshoot is possible.\n"
-                "The independent wrapper must already be running on ports 10020/20020."
+                "Configure the managed service in Backend setup."
             )
         )
         buttons = QDialogButtonBox(QDialogButtonBox.Save | QDialogButtonBox.Cancel)
@@ -433,14 +774,12 @@ class Window(QMainWindow):
         buttons.rejected.connect(dialog.reject)
         form.addRow(buttons)
         if dialog.exec() == QDialog.Accepted:
-            self.controller.downloader = downloader.text().strip()
             self.controller.device = device.text().strip() or "auto"
             self.cache.limit = int(limit.value()) * GIB
             self.settings = {
-                "downloader": self.controller.downloader,
                 "device": self.controller.device,
                 "limit": int(limit.value()),
-                "backend": self.controller.backend,
+                "backend": self.settings["backend"],
                 "storefront": self.settings["storefront"],
             }
             try:
@@ -452,49 +791,96 @@ class Window(QMainWindow):
                 )
 
     def tick(self):
+        self.artwork.poll()
+        self.artwork_status.setText(self.artwork.status())
+        self.artwork_status.setVisible(bool(self.artwork_status.text()))
+        self.artwork_retry.setVisible(bool(self.artwork.failures))
+        self.artwork_retry.setEnabled(bool(self.artwork.retryable()))
+        self.update_home()
+        self.refresh_artwork()
         if not self.country.text() and not self.country.hasFocus() and self.backend_storefront():
             self.adopt_backend_storefront()
         self.show_storefront()
-        if self.controller.backend == "lite":
-            service = self.setup_service
-            text = "Managed service not started · open Backend setup"
-            if service:
-                text = (
-                    "Stopping managed service" if service.stop_requested else service.runtime.state
-                )
-                if service.error:
-                    text += " · " + service.error
-            self.backend_status.setText(text)
-        else:
-            self.backend_status.setText("External classic backend")
+        service = self.setup_service
+        text = "Managed service not started · open Backend setup"
+        if service:
+            text = "Stopping managed service" if service.stop_requested else service.runtime.state
+            if service.error:
+                text += " · " + service.error
+        self.backend_status.setText(text)
         if self.catalog_future and self.catalog_future[1].done():
             generation, future = self.catalog_future
             self.catalog_future = None
             if generation == self.generation:
                 try:
-                    self.results = future.result()
-                    self.result_list.clear()
-                    self.result_list.addItems([track.title for track in self.results])
-                    albums = self.pending_result_kind == "albums"
-                    self.selected_button.setText("Open album" if albums else "Queue selected")
-                    self.selected_button.setEnabled(bool(self.results))
-                    self.all_button.setText(
-                        "Queue album" if self.pending_album_title else "Queue all results"
-                    )
-                    self.all_button.setEnabled(bool(self.results) and not albums)
-                    label = "albums" if albums else "songs"
-                    if len(self.results) == 1:
-                        label = label[:-1]
-                    action = "open album" if albums else "queue"
-                    context = self.pending_album_title
-                    self.catalog_status.setText(
-                        f"{context + ' · ' if context else ''}{len(self.results)} {label} · "
-                        + (
-                            f"double-click to {action}"
-                            if self.results
-                            else "try another query/storefront or paste an Apple Music URL"
+                    result = future.result()
+                    if self.pending_result_kind == "releases":
+                        self.receive_releases(result)
+                        result = None
+                    if result is not None:
+                        self.results = result
+                        self.displayed_search_diagnostics = None
+                        if isinstance(result, SearchResults):
+                            self.last_search_diagnostics = result.diagnostics
+                            self.displayed_search_diagnostics = result.diagnostics
+                            self.copy_search_button.setEnabled(True)
+                        self.album_tracks = (
+                            tuple(result)
+                            if self.pending_album_title
+                            and all(isinstance(item, Track) for item in result)
+                            else ()
                         )
-                    )
+                        self.play_album_button.setEnabled(bool(self.album_tracks))
+                        self.show_album_header()
+                        self.result_list.clear()
+                        if self.album_header.album:
+                            multiple_discs = any(track.disc_number > 1 for track in self.results)
+                            self.result_list.addItems(
+                                [track.album_row_title(multiple_discs) for track in self.results]
+                            )
+                            for index, track in enumerate(self.results):
+                                item = self.result_list.item(index)
+                                item.setData(TrackRowDelegate.duration_role, track.duration_label)
+                                item.setData(
+                                    Qt.AccessibleDescriptionRole, "Duration " + track.duration_label
+                                )
+                                item.setSizeHint(QSize(0, 30))
+                        else:
+                            self.result_list.addItems([track.title for track in self.results])
+                            for index in range(self.result_list.count()):
+                                self.result_list.item(index).setIcon(placeholder())
+                        if self.results:
+                            self.result_list.setCurrentRow(0)
+                        albums = self.pending_result_kind == "albums"
+                        self.selected_button.setText("Open album" if albums else "Queue selected")
+                        self.selected_button.setEnabled(bool(self.results))
+                        self.all_button.setText(
+                            "Queue album" if self.pending_album_title else "Queue all results"
+                        )
+                        self.all_button.setEnabled(bool(self.results) and not albums)
+                        label = "albums" if albums else "songs"
+                        if len(self.results) == 1:
+                            label = label[:-1]
+                        action = "open album" if albums else "queue"
+                        context = "" if self.album_header.album else self.pending_album_title
+                        self.catalog_status.setText(
+                            (
+                                ""
+                                if self.album_header.album
+                                else f"{context + ' · ' if context else ''}"
+                                + f"{len(self.results)} {label} · "
+                            )
+                            + (
+                                f"double-click to {action}"
+                                if self.results
+                                else "try another query/storefront or paste an Apple Music URL"
+                            )
+                        )
+                        if isinstance(result, SearchResults):
+                            self.catalog_status.setText(
+                                f"Results for “{result.diagnostics['query']}” · "
+                                + self.catalog_status.text()
+                            )
                 except CatalogDeferred as exc:
                     if exc.rate_limited:
                         self.catalog_retries += 1
@@ -512,10 +898,20 @@ class Window(QMainWindow):
                         self.catalog_timer.start(max(1, int(exc.seconds * 1000) + 1))
                 except PlayerError as exc:
                     self.catalog_status.setText(str(exc))
+                    if self.pending_result_kind == "releases":
+                        self.release_status.setText("Recent releases unavailable; try again later.")
+                        self.release_context = None
                 except Exception:
+                    if self.pending_result_kind == "releases":
+                        self.release_context = None
+                        self.release_status.setText("Recent releases unavailable; try again later.")
                     self.catalog_status.setText(
                         "Catalog unavailable. Check network/storefront or paste a song URL."
                     )
+        if self.pending_result_kind == "releases" and self.release_context:
+            self.release_status.setText(self.catalog_status.text())
+            if self.catalog_request is None:
+                self.release_context = None
         try:
             self.controller.tick()
         except Exception:
@@ -536,12 +932,27 @@ class Window(QMainWindow):
             self.rendered_queue = rows
         self.usage.setText(f"Cache {self.cache.usage / GIB:.2f} / {self.cache.limit / GIB:g} GiB")
         self.status.setText(c.error)
+        self.status.setVisible(bool(c.error))
         self.now.setText(c.current.track.title if c.current else "Nothing playing")
+        album = c.current.track.album if c.current else None
+        if album != self.now_album:
+            self.now_album = album
+            if self.now_card:
+                self.now_host.removeWidget(self.now_card)
+                self.now_card.deleteLater()
+            self.now_card = (
+                AlbumCard(album, self.artwork, self.open_album, compact=True) if album else None
+            )
+            if self.now_card:
+                self.now_card.focused.connect(self.set_badge_context)
+                self.now_host.addWidget(self.now_card)
         self.media_label.setText(
             c.media.label if c.media else "Media format appears after download verification."
         )
         self.output_label.setText(c.player.output_label if c.current else "")
         self.fallback.setText(c.media.warning(c.current.quality) if c.current and c.media else "")
+        self.output_label.setVisible(bool(self.output_label.text()))
+        self.fallback.setVisible(bool(self.fallback.text()))
         self.pause_button.setEnabled(bool(c.current and c.player.output_verified))
         self.seek.setEnabled(bool(c.current and c.player.output_verified))
         position = c.player.properties.get("time-pos") or 0 if c.current else 0
@@ -559,6 +970,8 @@ class Window(QMainWindow):
         self.timer.stop()
         self.catalog_pool.shutdown(wait=False, cancel_futures=True)
         self.controller.close()
+        self.artwork.close()
+        self.history.close()
         if self.setup_service:
             self.setup_service.close()
         event.accept()

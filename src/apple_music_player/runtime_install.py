@@ -39,18 +39,18 @@ def open_artifact(url, timeout):
 
 def host_problem():
     if platform.system() != "Linux" or platform.machine() not in {"x86_64", "AMD64"}:
-        return "Managed lite currently requires Linux x86_64. Use the external classic backend."
+        return "Managed lite currently requires Linux x86_64."
     if os.geteuid() == 0:
         return "Run the player as your normal desktop user, never as root."
     if not hasattr(os, "memfd_create"):
-        return "Private memory-backed login is unavailable on this host. Use classic."
+        return "Private memory-backed login is unavailable on this host."
     for name in (
         "/proc/sys/kernel/unprivileged_userns_clone",
         "/proc/sys/user/max_user_namespaces",
     ):
         try:
             if Path(name).read_text().strip() == "0":
-                return "User namespaces are disabled. Use classic or consult your administrator."
+                return "User namespaces are disabled. Consult your administrator."
         except OSError:
             pass  # The actual launcher may still report a host-policy denial.
     return ""

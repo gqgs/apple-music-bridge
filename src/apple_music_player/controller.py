@@ -12,6 +12,7 @@ class Entry:
     track: Track
     quality: str
     state: str = "Queued"
+    recorded: bool = False
 
     @property
     def key(self):
@@ -22,7 +23,7 @@ class Controller:
     def __init__(self, cache, player, downloader="apple-music-downloader", device="auto"):
         self.cache, self.player = cache, player
         self.downloader, self.device = downloader, device
-        self.backend = "classic"
+        self.backend = "lite"
         self.runtime = None
         self.queue = []
         self.executor = ThreadPoolExecutor(max_workers=1)
@@ -33,6 +34,7 @@ class Controller:
         self.media = None
         self.error = ""
         self.stopped = False
+        self.on_played = None
 
     def add(self, track, quality):
         if self.reject_storefront(track):
@@ -41,6 +43,31 @@ class Controller:
         if not any(entry.key == key for entry in self.queue):
             self.queue.append(Entry(track, quality))
         self.protect()
+
+    def play_album(self, tracks, quality):
+        tracks = list(tracks)
+        if not tracks:
+            self.error = "This album has no playable catalog tracks."
+            return False
+        if any(self.reject_storefront(track) for track in tracks):
+            return False
+        # Keep the in-flight job attached until it finishes cancellation. New work starts
+        # only afterwards; its completion cannot affect the new Entry identities.
+        if self.cancel:
+            self.cancel.set()
+        self.player.close()
+        self.current = self.media = None
+        self.queue = []
+        seen = set()
+        for track in tracks:
+            key = track.key(quality)
+            if key not in seen:
+                seen.add(key)
+                self.queue.append(Entry(track, quality))
+        self.stopped = False
+        self.error = ""
+        self.protect()
+        return True
 
     def reject_storefront(self, track):
         regions = getattr(self.runtime, "regions", ()) if self.backend == "lite" else ()
@@ -106,10 +133,11 @@ class Controller:
                     )
                     self.error = str(exc)
             except Exception:
-                entry.state = "Failed"
-                self.error = (
-                    "Could not store downloaded audio. Check cache permissions and free space."
-                )
+                if any(e is entry for e in self.queue):
+                    entry.state = "Failed"
+                    self.error = (
+                        "Could not store downloaded audio. Check cache permissions and free space."
+                    )
             finally:
                 if jobdir:
                     shutil.rmtree(jobdir)
@@ -122,6 +150,17 @@ class Controller:
                     self.current.state = (
                         "Paused" if self.player.properties.get("pause") else "Playing"
                     )
+                    if (
+                        not self.current.recorded
+                        and self.current.state == "Playing"
+                        and (self.player.properties.get("time-pos") or 0) > 0
+                    ):
+                        self.current.recorded = True
+                        if self.on_played:
+                            try:
+                                self.on_played(self.current.track)
+                            except Exception:
+                                self.error = "Local listening history could not be saved."
                 else:
                     self.current.state = "Waiting for audio output"
             except PlayerError as exc:

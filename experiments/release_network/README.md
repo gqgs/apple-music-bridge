@@ -1,5 +1,9 @@
 # Direct-weight release classifier experiment
 
+**Follow-up:** [independent candidate and real-release comparison](REAL_RESULTS.md).
+The original rule-encoding control below is retained for reproducibility. The
+follow-up freezes a different 101-parameter network before collecting labels.
+
 This is an isolated **rule-encoding experiment**, not a learned classifier and not
 a proposed production replacement. The player never imports it. No network calls,
 accounts, downloaded media, training dataset, optimizer, gradients, embeddings or

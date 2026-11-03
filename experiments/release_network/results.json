@@ -1,0 +1,1431 @@
+{
+  "candidate_sha256": "f8d15e7917e74dc76fd05732331f0becacfc92a297ca1aeb68468f697ce57f14",
+  "meaning": "Agreement with observed US Apple Music page sections, not catalog accuracy",
+  "candidate": {
+    "matched": 27,
+    "total": 35,
+    "by_artist": {
+      "Björk": {
+        "matched": 18,
+        "total": 26
+      },
+      "Faye Webster": {
+        "matched": 9,
+        "total": 9
+      }
+    },
+    "confusion_actual_rows_predicted_columns": {
+      "Albums": {
+        "Albums": 10,
+        "Singles & EPs": 0,
+        "Live Albums": 1,
+        "Compilations": 0,
+        "Others": 0
+      },
+      "Singles & EPs": {
+        "Albums": 0,
+        "Singles & EPs": 10,
+        "Live Albums": 1,
+        "Compilations": 0,
+        "Others": 0
+      },
+      "Live Albums": {
+        "Albums": 0,
+        "Singles & EPs": 0,
+        "Live Albums": 7,
+        "Compilations": 0,
+        "Others": 0
+      },
+      "Compilations": {
+        "Albums": 2,
+        "Singles & EPs": 3,
+        "Live Albums": 1,
+        "Compilations": 0,
+        "Others": 0
+      },
+      "Others": {
+        "Albums": 0,
+        "Singles & EPs": 0,
+        "Live Albums": 0,
+        "Compilations": 0,
+        "Others": 0
+      }
+    }
+  },
+  "heuristic": {
+    "matched": 27,
+    "total": 35,
+    "by_artist": {
+      "Björk": {
+        "matched": 18,
+        "total": 26
+      },
+      "Faye Webster": {
+        "matched": 9,
+        "total": 9
+      }
+    },
+    "confusion_actual_rows_predicted_columns": {
+      "Albums": {
+        "Albums": 11,
+        "Singles & EPs": 0,
+        "Live Albums": 0,
+        "Compilations": 0,
+        "Others": 0
+      },
+      "Singles & EPs": {
+        "Albums": 0,
+        "Singles & EPs": 10,
+        "Live Albums": 1,
+        "Compilations": 0,
+        "Others": 0
+      },
+      "Live Albums": {
+        "Albums": 1,
+        "Singles & EPs": 0,
+        "Live Albums": 6,
+        "Compilations": 0,
+        "Others": 0
+      },
+      "Compilations": {
+        "Albums": 3,
+        "Singles & EPs": 3,
+        "Live Albums": 0,
+        "Compilations": 0,
+        "Others": 0
+      },
+      "Others": {
+        "Albums": 0,
+        "Singles & EPs": 0,
+        "Live Albums": 0,
+        "Compilations": 0,
+        "Others": 0
+      }
+    }
+  },
+  "excluded_overlapping_sections": [
+    {
+      "artist": "Björk",
+      "title": "Mount Wittenberg Orca (Expanded Edition)",
+      "display_year": 2023,
+      "country": "us",
+      "source_url": "https://music.apple.com/us/artist/bj%C3%B6rk/295015",
+      "observed_sections": [
+        "Albums",
+        "Compilations"
+      ],
+      "observed_on": "2026-11-03",
+      "features": {
+        "title_present": 1,
+        "single_word": 0,
+        "ep_word": 0,
+        "live_word": 0,
+        "performance_phrase": 0,
+        "greatest_hits_phrase": 0,
+        "best_of_phrase": 0,
+        "anthology_word": 0,
+        "compilation_word": 0,
+        "remix_word": 0
+      },
+      "scores": {
+        "Albums": 1.5,
+        "Singles & EPs": 0,
+        "Live Albums": 0.0,
+        "Compilations": 0.0,
+        "Others": 0
+      },
+      "candidate": "Albums",
+      "heuristic": "Albums"
+    }
+  ],
+  "disagreements": [
+    {
+      "artist": "Björk",
+      "title": "Cornucopia Live",
+      "display_year": 2025,
+      "country": "us",
+      "source_url": "https://music.apple.com/us/artist/bj%C3%B6rk/295015",
+      "observed_sections": [
+        "Albums"
+      ],
+      "observed_on": "2026-11-03",
+      "features": {
+        "title_present": 1,
+        "single_word": 0,
+        "ep_word": 0,
+        "live_word": 1,
+        "performance_phrase": 0,
+        "greatest_hits_phrase": 0,
+        "best_of_phrase": 0,
+        "anthology_word": 0,
+        "compilation_word": 0,
+        "remix_word": 0
+      },
+      "scores": {
+        "Albums": 0.75,
+        "Singles & EPs": 0,
+        "Live Albums": 3.0,
+        "Compilations": 0.0,
+        "Others": 0
+      },
+      "candidate": "Live Albums",
+      "heuristic": "Albums"
+    },
+    {
+      "artist": "Björk",
+      "title": "Apple Music Live: Björk (Cornucopia)",
+      "display_year": 2025,
+      "country": "us",
+      "source_url": "https://music.apple.com/us/artist/bj%C3%B6rk/295015",
+      "observed_sections": [
+        "Live Albums"
+      ],
+      "observed_on": "2026-11-03",
+      "features": {
+        "title_present": 1,
+        "single_word": 0,
+        "ep_word": 0,
+        "live_word": 1,
+        "performance_phrase": 0,
+        "greatest_hits_phrase": 0,
+        "best_of_phrase": 0,
+        "anthology_word": 0,
+        "compilation_word": 0,
+        "remix_word": 0
+      },
+      "scores": {
+        "Albums": 0.75,
+        "Singles & EPs": 0,
+        "Live Albums": 3.0,
+        "Compilations": 0.0,
+        "Others": 0
+      },
+      "candidate": "Live Albums",
+      "heuristic": "Albums"
+    },
+    {
+      "artist": "Björk",
+      "title": "Apple Music Live: NYE 2025 (DJ Mix)",
+      "display_year": 2024,
+      "country": "us",
+      "source_url": "https://music.apple.com/us/artist/bj%C3%B6rk/295015",
+      "observed_sections": [
+        "Compilations"
+      ],
+      "observed_on": "2026-11-03",
+      "features": {
+        "title_present": 1,
+        "single_word": 0,
+        "ep_word": 0,
+        "live_word": 1,
+        "performance_phrase": 0,
+        "greatest_hits_phrase": 0,
+        "best_of_phrase": 0,
+        "anthology_word": 0,
+        "compilation_word": 0,
+        "remix_word": 0
+      },
+      "scores": {
+        "Albums": 0.75,
+        "Singles & EPs": 0,
+        "Live Albums": 3.0,
+        "Compilations": 0.0,
+        "Others": 0
+      },
+      "candidate": "Live Albums",
+      "heuristic": "Albums"
+    }
+  ],
+  "rows": [
+    {
+      "artist": "Björk",
+      "title": "Cornucopia Live",
+      "display_year": 2025,
+      "country": "us",
+      "source_url": "https://music.apple.com/us/artist/bj%C3%B6rk/295015",
+      "observed_sections": [
+        "Albums"
+      ],
+      "observed_on": "2026-11-03",
+      "features": {
+        "title_present": 1,
+        "single_word": 0,
+        "ep_word": 0,
+        "live_word": 1,
+        "performance_phrase": 0,
+        "greatest_hits_phrase": 0,
+        "best_of_phrase": 0,
+        "anthology_word": 0,
+        "compilation_word": 0,
+        "remix_word": 0
+      },
+      "scores": {
+        "Albums": 0.75,
+        "Singles & EPs": 0,
+        "Live Albums": 3.0,
+        "Compilations": 0.0,
+        "Others": 0
+      },
+      "candidate": "Live Albums",
+      "heuristic": "Albums"
+    },
+    {
+      "artist": "Björk",
+      "title": "Mount Wittenberg Orca (Expanded Edition)",
+      "display_year": 2023,
+      "country": "us",
+      "source_url": "https://music.apple.com/us/artist/bj%C3%B6rk/295015",
+      "observed_sections": [
+        "Albums",
+        "Compilations"
+      ],
+      "observed_on": "2026-11-03",
+      "features": {
+        "title_present": 1,
+        "single_word": 0,
+        "ep_word": 0,
+        "live_word": 0,
+        "performance_phrase": 0,
+        "greatest_hits_phrase": 0,
+        "best_of_phrase": 0,
+        "anthology_word": 0,
+        "compilation_word": 0,
+        "remix_word": 0
+      },
+      "scores": {
+        "Albums": 1.5,
+        "Singles & EPs": 0,
+        "Live Albums": 0.0,
+        "Compilations": 0.0,
+        "Others": 0
+      },
+      "candidate": "Albums",
+      "heuristic": "Albums"
+    },
+    {
+      "artist": "Björk",
+      "title": "Fossora",
+      "display_year": 2022,
+      "country": "us",
+      "source_url": "https://music.apple.com/us/artist/bj%C3%B6rk/295015",
+      "observed_sections": [
+        "Albums"
+      ],
+      "observed_on": "2026-11-03",
+      "features": {
+        "title_present": 1,
+        "single_word": 0,
+        "ep_word": 0,
+        "live_word": 0,
+        "performance_phrase": 0,
+        "greatest_hits_phrase": 0,
+        "best_of_phrase": 0,
+        "anthology_word": 0,
+        "compilation_word": 0,
+        "remix_word": 0
+      },
+      "scores": {
+        "Albums": 1.5,
+        "Singles & EPs": 0,
+        "Live Albums": 0.0,
+        "Compilations": 0.0,
+        "Others": 0
+      },
+      "candidate": "Albums",
+      "heuristic": "Albums"
+    },
+    {
+      "artist": "Björk",
+      "title": "Utopia",
+      "display_year": 2017,
+      "country": "us",
+      "source_url": "https://music.apple.com/us/artist/bj%C3%B6rk/295015",
+      "observed_sections": [
+        "Albums"
+      ],
+      "observed_on": "2026-11-03",
+      "features": {
+        "title_present": 1,
+        "single_word": 0,
+        "ep_word": 0,
+        "live_word": 0,
+        "performance_phrase": 0,
+        "greatest_hits_phrase": 0,
+        "best_of_phrase": 0,
+        "anthology_word": 0,
+        "compilation_word": 0,
+        "remix_word": 0
+      },
+      "scores": {
+        "Albums": 1.5,
+        "Singles & EPs": 0,
+        "Live Albums": 0.0,
+        "Compilations": 0.0,
+        "Others": 0
+      },
+      "candidate": "Albums",
+      "heuristic": "Albums"
+    },
+    {
+      "artist": "Björk",
+      "title": "Vulnicura Strings (The Acoustic Version: Strings, Voice and Viola Organista Only)",
+      "display_year": 2015,
+      "country": "us",
+      "source_url": "https://music.apple.com/us/artist/bj%C3%B6rk/295015",
+      "observed_sections": [
+        "Albums"
+      ],
+      "observed_on": "2026-11-03",
+      "features": {
+        "title_present": 1,
+        "single_word": 0,
+        "ep_word": 0,
+        "live_word": 0,
+        "performance_phrase": 0,
+        "greatest_hits_phrase": 0,
+        "best_of_phrase": 0,
+        "anthology_word": 0,
+        "compilation_word": 0,
+        "remix_word": 0
+      },
+      "scores": {
+        "Albums": 1.5,
+        "Singles & EPs": 0,
+        "Live Albums": 0.0,
+        "Compilations": 0.0,
+        "Others": 0
+      },
+      "candidate": "Albums",
+      "heuristic": "Albums"
+    },
+    {
+      "artist": "Björk",
+      "title": "Vulnicura",
+      "display_year": 2015,
+      "country": "us",
+      "source_url": "https://music.apple.com/us/artist/bj%C3%B6rk/295015",
+      "observed_sections": [
+        "Albums"
+      ],
+      "observed_on": "2026-11-03",
+      "features": {
+        "title_present": 1,
+        "single_word": 0,
+        "ep_word": 0,
+        "live_word": 0,
+        "performance_phrase": 0,
+        "greatest_hits_phrase": 0,
+        "best_of_phrase": 0,
+        "anthology_word": 0,
+        "compilation_word": 0,
+        "remix_word": 0
+      },
+      "scores": {
+        "Albums": 1.5,
+        "Singles & EPs": 0,
+        "Live Albums": 0.0,
+        "Compilations": 0.0,
+        "Others": 0
+      },
+      "candidate": "Albums",
+      "heuristic": "Albums"
+    },
+    {
+      "artist": "Björk",
+      "title": "Biophilia (Deluxe Edition)",
+      "display_year": 2011,
+      "country": "us",
+      "source_url": "https://music.apple.com/us/artist/bj%C3%B6rk/295015",
+      "observed_sections": [
+        "Albums"
+      ],
+      "observed_on": "2026-11-03",
+      "features": {
+        "title_present": 1,
+        "single_word": 0,
+        "ep_word": 0,
+        "live_word": 0,
+        "performance_phrase": 0,
+        "greatest_hits_phrase": 0,
+        "best_of_phrase": 0,
+        "anthology_word": 0,
+        "compilation_word": 0,
+        "remix_word": 0
+      },
+      "scores": {
+        "Albums": 1.5,
+        "Singles & EPs": 0,
+        "Live Albums": 0.0,
+        "Compilations": 0.0,
+        "Others": 0
+      },
+      "candidate": "Albums",
+      "heuristic": "Albums"
+    },
+    {
+      "artist": "Björk",
+      "title": "Where Is the Line (Live at Harpa Hall, Reykjavík) - Single",
+      "display_year": 2026,
+      "country": "us",
+      "source_url": "https://music.apple.com/us/artist/bj%C3%B6rk/295015",
+      "observed_sections": [
+        "Singles & EPs"
+      ],
+      "observed_on": "2026-11-03",
+      "features": {
+        "title_present": 1,
+        "single_word": 1,
+        "ep_word": 0,
+        "live_word": 1,
+        "performance_phrase": 0,
+        "greatest_hits_phrase": 0,
+        "best_of_phrase": 0,
+        "anthology_word": 0,
+        "compilation_word": 0,
+        "remix_word": 0
+      },
+      "scores": {
+        "Albums": 0.0,
+        "Singles & EPs": 3,
+        "Live Albums": 1.5,
+        "Compilations": -1.5,
+        "Others": 0
+      },
+      "candidate": "Singles & EPs",
+      "heuristic": "Singles & EPs"
+    },
+    {
+      "artist": "Björk",
+      "title": "Berghain (Remix) - Single",
+      "display_year": 2026,
+      "country": "us",
+      "source_url": "https://music.apple.com/us/artist/bj%C3%B6rk/295015",
+      "observed_sections": [
+        "Singles & EPs"
+      ],
+      "observed_on": "2026-11-03",
+      "features": {
+        "title_present": 1,
+        "single_word": 1,
+        "ep_word": 0,
+        "live_word": 0,
+        "performance_phrase": 0,
+        "greatest_hits_phrase": 0,
+        "best_of_phrase": 0,
+        "anthology_word": 0,
+        "compilation_word": 0,
+        "remix_word": 1
+      },
+      "scores": {
+        "Albums": 0.25,
+        "Singles & EPs": 3,
+        "Live Albums": -1.5,
+        "Compilations": -1.5,
+        "Others": 2
+      },
+      "candidate": "Singles & EPs",
+      "heuristic": "Singles & EPs"
+    },
+    {
+      "artist": "Björk",
+      "title": "Oral (feat. ROSALÍA) [Olof Dreijer Remix] - Single",
+      "display_year": 2024,
+      "country": "us",
+      "source_url": "https://music.apple.com/us/artist/bj%C3%B6rk/295015",
+      "observed_sections": [
+        "Singles & EPs"
+      ],
+      "observed_on": "2026-11-03",
+      "features": {
+        "title_present": 1,
+        "single_word": 1,
+        "ep_word": 0,
+        "live_word": 0,
+        "performance_phrase": 0,
+        "greatest_hits_phrase": 0,
+        "best_of_phrase": 0,
+        "anthology_word": 0,
+        "compilation_word": 0,
+        "remix_word": 1
+      },
+      "scores": {
+        "Albums": 0.25,
+        "Singles & EPs": 3,
+        "Live Albums": -1.5,
+        "Compilations": -1.5,
+        "Others": 2
+      },
+      "candidate": "Singles & EPs",
+      "heuristic": "Singles & EPs"
+    },
+    {
+      "artist": "Björk",
+      "title": "Oral - Single",
+      "display_year": 2023,
+      "country": "us",
+      "source_url": "https://music.apple.com/us/artist/bj%C3%B6rk/295015",
+      "observed_sections": [
+        "Singles & EPs"
+      ],
+      "observed_on": "2026-11-03",
+      "features": {
+        "title_present": 1,
+        "single_word": 1,
+        "ep_word": 0,
+        "live_word": 0,
+        "performance_phrase": 0,
+        "greatest_hits_phrase": 0,
+        "best_of_phrase": 0,
+        "anthology_word": 0,
+        "compilation_word": 0,
+        "remix_word": 0
+      },
+      "scores": {
+        "Albums": 0.75,
+        "Singles & EPs": 3,
+        "Live Albums": -1.5,
+        "Compilations": -1.5,
+        "Others": 0
+      },
+      "candidate": "Singles & EPs",
+      "heuristic": "Singles & EPs"
+    },
+    {
+      "artist": "Björk",
+      "title": "On and Ever Onward (Live from Housing Works 2009) [Live]",
+      "display_year": 2023,
+      "country": "us",
+      "source_url": "https://music.apple.com/us/artist/bj%C3%B6rk/295015",
+      "observed_sections": [
+        "Singles & EPs"
+      ],
+      "observed_on": "2026-11-03",
+      "features": {
+        "title_present": 1,
+        "single_word": 0,
+        "ep_word": 0,
+        "live_word": 1,
+        "performance_phrase": 0,
+        "greatest_hits_phrase": 0,
+        "best_of_phrase": 0,
+        "anthology_word": 0,
+        "compilation_word": 0,
+        "remix_word": 0
+      },
+      "scores": {
+        "Albums": 0.75,
+        "Singles & EPs": 0,
+        "Live Albums": 3.0,
+        "Compilations": 0.0,
+        "Others": 0
+      },
+      "candidate": "Live Albums",
+      "heuristic": "Live Albums"
+    },
+    {
+      "artist": "Björk",
+      "title": "Ovule (feat. Shygirl) [Sega Bodega Remix] - Single",
+      "display_year": 2023,
+      "country": "us",
+      "source_url": "https://music.apple.com/us/artist/bj%C3%B6rk/295015",
+      "observed_sections": [
+        "Singles & EPs"
+      ],
+      "observed_on": "2026-11-03",
+      "features": {
+        "title_present": 1,
+        "single_word": 1,
+        "ep_word": 0,
+        "live_word": 0,
+        "performance_phrase": 0,
+        "greatest_hits_phrase": 0,
+        "best_of_phrase": 0,
+        "anthology_word": 0,
+        "compilation_word": 0,
+        "remix_word": 1
+      },
+      "scores": {
+        "Albums": 0.25,
+        "Singles & EPs": 3,
+        "Live Albums": -1.5,
+        "Compilations": -1.5,
+        "Others": 2
+      },
+      "candidate": "Singles & EPs",
+      "heuristic": "Singles & EPs"
+    },
+    {
+      "artist": "Björk",
+      "title": "Atopos - Single",
+      "display_year": 2022,
+      "country": "us",
+      "source_url": "https://music.apple.com/us/artist/bj%C3%B6rk/295015",
+      "observed_sections": [
+        "Singles & EPs"
+      ],
+      "observed_on": "2026-11-03",
+      "features": {
+        "title_present": 1,
+        "single_word": 1,
+        "ep_word": 0,
+        "live_word": 0,
+        "performance_phrase": 0,
+        "greatest_hits_phrase": 0,
+        "best_of_phrase": 0,
+        "anthology_word": 0,
+        "compilation_word": 0,
+        "remix_word": 0
+      },
+      "scores": {
+        "Albums": 0.75,
+        "Singles & EPs": 3,
+        "Live Albums": -1.5,
+        "Compilations": -1.5,
+        "Others": 0
+      },
+      "candidate": "Singles & EPs",
+      "heuristic": "Singles & EPs"
+    },
+    {
+      "artist": "Björk",
+      "title": "Björk Orkestral with the Hamrahlíð Choir (Live at Harpa Hall, Reykjavík)",
+      "display_year": 2026,
+      "country": "us",
+      "source_url": "https://music.apple.com/us/artist/bj%C3%B6rk/295015",
+      "observed_sections": [
+        "Live Albums"
+      ],
+      "observed_on": "2026-11-03",
+      "features": {
+        "title_present": 1,
+        "single_word": 0,
+        "ep_word": 0,
+        "live_word": 1,
+        "performance_phrase": 0,
+        "greatest_hits_phrase": 0,
+        "best_of_phrase": 0,
+        "anthology_word": 0,
+        "compilation_word": 0,
+        "remix_word": 0
+      },
+      "scores": {
+        "Albums": 0.75,
+        "Singles & EPs": 0,
+        "Live Albums": 3.0,
+        "Compilations": 0.0,
+        "Others": 0
+      },
+      "candidate": "Live Albums",
+      "heuristic": "Live Albums"
+    },
+    {
+      "artist": "Björk",
+      "title": "Apple Music Live: Björk (Cornucopia)",
+      "display_year": 2025,
+      "country": "us",
+      "source_url": "https://music.apple.com/us/artist/bj%C3%B6rk/295015",
+      "observed_sections": [
+        "Live Albums"
+      ],
+      "observed_on": "2026-11-03",
+      "features": {
+        "title_present": 1,
+        "single_word": 0,
+        "ep_word": 0,
+        "live_word": 1,
+        "performance_phrase": 0,
+        "greatest_hits_phrase": 0,
+        "best_of_phrase": 0,
+        "anthology_word": 0,
+        "compilation_word": 0,
+        "remix_word": 0
+      },
+      "scores": {
+        "Albums": 0.75,
+        "Singles & EPs": 0,
+        "Live Albums": 3.0,
+        "Compilations": 0.0,
+        "Others": 0
+      },
+      "candidate": "Live Albums",
+      "heuristic": "Albums"
+    },
+    {
+      "artist": "Björk",
+      "title": "Vulnicura (Live)",
+      "display_year": 2015,
+      "country": "us",
+      "source_url": "https://music.apple.com/us/artist/bj%C3%B6rk/295015",
+      "observed_sections": [
+        "Live Albums"
+      ],
+      "observed_on": "2026-11-03",
+      "features": {
+        "title_present": 1,
+        "single_word": 0,
+        "ep_word": 0,
+        "live_word": 1,
+        "performance_phrase": 0,
+        "greatest_hits_phrase": 0,
+        "best_of_phrase": 0,
+        "anthology_word": 0,
+        "compilation_word": 0,
+        "remix_word": 0
+      },
+      "scores": {
+        "Albums": 0.75,
+        "Singles & EPs": 0,
+        "Live Albums": 3.0,
+        "Compilations": 0.0,
+        "Others": 0
+      },
+      "candidate": "Live Albums",
+      "heuristic": "Live Albums"
+    },
+    {
+      "artist": "Björk",
+      "title": "Biophilia (Live)",
+      "display_year": 2014,
+      "country": "us",
+      "source_url": "https://music.apple.com/us/artist/bj%C3%B6rk/295015",
+      "observed_sections": [
+        "Live Albums"
+      ],
+      "observed_on": "2026-11-03",
+      "features": {
+        "title_present": 1,
+        "single_word": 0,
+        "ep_word": 0,
+        "live_word": 1,
+        "performance_phrase": 0,
+        "greatest_hits_phrase": 0,
+        "best_of_phrase": 0,
+        "anthology_word": 0,
+        "compilation_word": 0,
+        "remix_word": 0
+      },
+      "scores": {
+        "Albums": 0.75,
+        "Singles & EPs": 0,
+        "Live Albums": 3.0,
+        "Compilations": 0.0,
+        "Others": 0
+      },
+      "candidate": "Live Albums",
+      "heuristic": "Live Albums"
+    },
+    {
+      "artist": "Björk",
+      "title": "Vespertine (Live)",
+      "display_year": 2003,
+      "country": "us",
+      "source_url": "https://music.apple.com/us/artist/bj%C3%B6rk/295015",
+      "observed_sections": [
+        "Live Albums"
+      ],
+      "observed_on": "2026-11-03",
+      "features": {
+        "title_present": 1,
+        "single_word": 0,
+        "ep_word": 0,
+        "live_word": 1,
+        "performance_phrase": 0,
+        "greatest_hits_phrase": 0,
+        "best_of_phrase": 0,
+        "anthology_word": 0,
+        "compilation_word": 0,
+        "remix_word": 0
+      },
+      "scores": {
+        "Albums": 0.75,
+        "Singles & EPs": 0,
+        "Live Albums": 3.0,
+        "Compilations": 0.0,
+        "Others": 0
+      },
+      "candidate": "Live Albums",
+      "heuristic": "Live Albums"
+    },
+    {
+      "artist": "Björk",
+      "title": "Homogenic (Live)",
+      "display_year": 1997,
+      "country": "us",
+      "source_url": "https://music.apple.com/us/artist/bj%C3%B6rk/295015",
+      "observed_sections": [
+        "Live Albums"
+      ],
+      "observed_on": "2026-11-03",
+      "features": {
+        "title_present": 1,
+        "single_word": 0,
+        "ep_word": 0,
+        "live_word": 1,
+        "performance_phrase": 0,
+        "greatest_hits_phrase": 0,
+        "best_of_phrase": 0,
+        "anthology_word": 0,
+        "compilation_word": 0,
+        "remix_word": 0
+      },
+      "scores": {
+        "Albums": 0.75,
+        "Singles & EPs": 0,
+        "Live Albums": 3.0,
+        "Compilations": 0.0,
+        "Others": 0
+      },
+      "candidate": "Live Albums",
+      "heuristic": "Live Albums"
+    },
+    {
+      "artist": "Björk",
+      "title": "Post (Live)",
+      "display_year": 1995,
+      "country": "us",
+      "source_url": "https://music.apple.com/us/artist/bj%C3%B6rk/295015",
+      "observed_sections": [
+        "Live Albums"
+      ],
+      "observed_on": "2026-11-03",
+      "features": {
+        "title_present": 1,
+        "single_word": 0,
+        "ep_word": 0,
+        "live_word": 1,
+        "performance_phrase": 0,
+        "greatest_hits_phrase": 0,
+        "best_of_phrase": 0,
+        "anthology_word": 0,
+        "compilation_word": 0,
+        "remix_word": 0
+      },
+      "scores": {
+        "Albums": 0.75,
+        "Singles & EPs": 0,
+        "Live Albums": 3.0,
+        "Compilations": 0.0,
+        "Others": 0
+      },
+      "candidate": "Live Albums",
+      "heuristic": "Live Albums"
+    },
+    {
+      "artist": "Björk",
+      "title": "Apple Music Live: NYE 2025 (DJ Mix)",
+      "display_year": 2024,
+      "country": "us",
+      "source_url": "https://music.apple.com/us/artist/bj%C3%B6rk/295015",
+      "observed_sections": [
+        "Compilations"
+      ],
+      "observed_on": "2026-11-03",
+      "features": {
+        "title_present": 1,
+        "single_word": 0,
+        "ep_word": 0,
+        "live_word": 1,
+        "performance_phrase": 0,
+        "greatest_hits_phrase": 0,
+        "best_of_phrase": 0,
+        "anthology_word": 0,
+        "compilation_word": 0,
+        "remix_word": 0
+      },
+      "scores": {
+        "Albums": 0.75,
+        "Singles & EPs": 0,
+        "Live Albums": 3.0,
+        "Compilations": 0.0,
+        "Others": 0
+      },
+      "candidate": "Live Albums",
+      "heuristic": "Albums"
+    },
+    {
+      "artist": "Björk",
+      "title": "Bastards",
+      "display_year": 2012,
+      "country": "us",
+      "source_url": "https://music.apple.com/us/artist/bj%C3%B6rk/295015",
+      "observed_sections": [
+        "Compilations"
+      ],
+      "observed_on": "2026-11-03",
+      "features": {
+        "title_present": 1,
+        "single_word": 0,
+        "ep_word": 0,
+        "live_word": 0,
+        "performance_phrase": 0,
+        "greatest_hits_phrase": 0,
+        "best_of_phrase": 0,
+        "anthology_word": 0,
+        "compilation_word": 0,
+        "remix_word": 0
+      },
+      "scores": {
+        "Albums": 1.5,
+        "Singles & EPs": 0,
+        "Live Albums": 0.0,
+        "Compilations": 0.0,
+        "Others": 0
+      },
+      "candidate": "Albums",
+      "heuristic": "Albums"
+    },
+    {
+      "artist": "Björk",
+      "title": "Moon - Single",
+      "display_year": 2011,
+      "country": "us",
+      "source_url": "https://music.apple.com/us/artist/bj%C3%B6rk/295015",
+      "observed_sections": [
+        "Compilations"
+      ],
+      "observed_on": "2026-11-03",
+      "features": {
+        "title_present": 1,
+        "single_word": 1,
+        "ep_word": 0,
+        "live_word": 0,
+        "performance_phrase": 0,
+        "greatest_hits_phrase": 0,
+        "best_of_phrase": 0,
+        "anthology_word": 0,
+        "compilation_word": 0,
+        "remix_word": 0
+      },
+      "scores": {
+        "Albums": 0.75,
+        "Singles & EPs": 3,
+        "Live Albums": -1.5,
+        "Compilations": -1.5,
+        "Others": 0
+      },
+      "candidate": "Singles & EPs",
+      "heuristic": "Singles & EPs"
+    },
+    {
+      "artist": "Björk",
+      "title": "Virus - Single",
+      "display_year": 2011,
+      "country": "us",
+      "source_url": "https://music.apple.com/us/artist/bj%C3%B6rk/295015",
+      "observed_sections": [
+        "Compilations"
+      ],
+      "observed_on": "2026-11-03",
+      "features": {
+        "title_present": 1,
+        "single_word": 1,
+        "ep_word": 0,
+        "live_word": 0,
+        "performance_phrase": 0,
+        "greatest_hits_phrase": 0,
+        "best_of_phrase": 0,
+        "anthology_word": 0,
+        "compilation_word": 0,
+        "remix_word": 0
+      },
+      "scores": {
+        "Albums": 0.75,
+        "Singles & EPs": 3,
+        "Live Albums": -1.5,
+        "Compilations": -1.5,
+        "Others": 0
+      },
+      "candidate": "Singles & EPs",
+      "heuristic": "Singles & EPs"
+    },
+    {
+      "artist": "Björk",
+      "title": "The Comet Song - Single",
+      "display_year": 2010,
+      "country": "us",
+      "source_url": "https://music.apple.com/us/artist/bj%C3%B6rk/295015",
+      "observed_sections": [
+        "Compilations"
+      ],
+      "observed_on": "2026-11-03",
+      "features": {
+        "title_present": 1,
+        "single_word": 1,
+        "ep_word": 0,
+        "live_word": 0,
+        "performance_phrase": 0,
+        "greatest_hits_phrase": 0,
+        "best_of_phrase": 0,
+        "anthology_word": 0,
+        "compilation_word": 0,
+        "remix_word": 0
+      },
+      "scores": {
+        "Albums": 0.75,
+        "Singles & EPs": 3,
+        "Live Albums": -1.5,
+        "Compilations": -1.5,
+        "Others": 0
+      },
+      "candidate": "Singles & EPs",
+      "heuristic": "Singles & EPs"
+    },
+    {
+      "artist": "Björk",
+      "title": "Voltaic",
+      "display_year": 2009,
+      "country": "us",
+      "source_url": "https://music.apple.com/us/artist/bj%C3%B6rk/295015",
+      "observed_sections": [
+        "Compilations"
+      ],
+      "observed_on": "2026-11-03",
+      "features": {
+        "title_present": 1,
+        "single_word": 0,
+        "ep_word": 0,
+        "live_word": 0,
+        "performance_phrase": 0,
+        "greatest_hits_phrase": 0,
+        "best_of_phrase": 0,
+        "anthology_word": 0,
+        "compilation_word": 0,
+        "remix_word": 0
+      },
+      "scores": {
+        "Albums": 1.5,
+        "Singles & EPs": 0,
+        "Live Albums": 0.0,
+        "Compilations": 0.0,
+        "Others": 0
+      },
+      "candidate": "Albums",
+      "heuristic": "Albums"
+    },
+    {
+      "artist": "Faye Webster",
+      "title": "Underdressed at the Symphony",
+      "display_year": 2024,
+      "country": "us",
+      "source_url": "https://music.apple.com/us/artist/faye-webster/532412540",
+      "observed_sections": [
+        "Albums"
+      ],
+      "observed_on": "2026-11-03",
+      "features": {
+        "title_present": 1,
+        "single_word": 0,
+        "ep_word": 0,
+        "live_word": 0,
+        "performance_phrase": 0,
+        "greatest_hits_phrase": 0,
+        "best_of_phrase": 0,
+        "anthology_word": 0,
+        "compilation_word": 0,
+        "remix_word": 0
+      },
+      "scores": {
+        "Albums": 1.5,
+        "Singles & EPs": 0,
+        "Live Albums": 0.0,
+        "Compilations": 0.0,
+        "Others": 0
+      },
+      "candidate": "Albums",
+      "heuristic": "Albums"
+    },
+    {
+      "artist": "Faye Webster",
+      "title": "I Know I'm Funny haha",
+      "display_year": 2021,
+      "country": "us",
+      "source_url": "https://music.apple.com/us/artist/faye-webster/532412540",
+      "observed_sections": [
+        "Albums"
+      ],
+      "observed_on": "2026-11-03",
+      "features": {
+        "title_present": 1,
+        "single_word": 0,
+        "ep_word": 0,
+        "live_word": 0,
+        "performance_phrase": 0,
+        "greatest_hits_phrase": 0,
+        "best_of_phrase": 0,
+        "anthology_word": 0,
+        "compilation_word": 0,
+        "remix_word": 0
+      },
+      "scores": {
+        "Albums": 1.5,
+        "Singles & EPs": 0,
+        "Live Albums": 0.0,
+        "Compilations": 0.0,
+        "Others": 0
+      },
+      "candidate": "Albums",
+      "heuristic": "Albums"
+    },
+    {
+      "artist": "Faye Webster",
+      "title": "Atlanta Millionaires Club",
+      "display_year": 2019,
+      "country": "us",
+      "source_url": "https://music.apple.com/us/artist/faye-webster/532412540",
+      "observed_sections": [
+        "Albums"
+      ],
+      "observed_on": "2026-11-03",
+      "features": {
+        "title_present": 1,
+        "single_word": 0,
+        "ep_word": 0,
+        "live_word": 0,
+        "performance_phrase": 0,
+        "greatest_hits_phrase": 0,
+        "best_of_phrase": 0,
+        "anthology_word": 0,
+        "compilation_word": 0,
+        "remix_word": 0
+      },
+      "scores": {
+        "Albums": 1.5,
+        "Singles & EPs": 0,
+        "Live Albums": 0.0,
+        "Compilations": 0.0,
+        "Others": 0
+      },
+      "candidate": "Albums",
+      "heuristic": "Albums"
+    },
+    {
+      "artist": "Faye Webster",
+      "title": "Faye Webster",
+      "display_year": 2017,
+      "country": "us",
+      "source_url": "https://music.apple.com/us/artist/faye-webster/532412540",
+      "observed_sections": [
+        "Albums"
+      ],
+      "observed_on": "2026-11-03",
+      "features": {
+        "title_present": 1,
+        "single_word": 0,
+        "ep_word": 0,
+        "live_word": 0,
+        "performance_phrase": 0,
+        "greatest_hits_phrase": 0,
+        "best_of_phrase": 0,
+        "anthology_word": 0,
+        "compilation_word": 0,
+        "remix_word": 0
+      },
+      "scores": {
+        "Albums": 1.5,
+        "Singles & EPs": 0,
+        "Live Albums": 0.0,
+        "Compilations": 0.0,
+        "Others": 0
+      },
+      "candidate": "Albums",
+      "heuristic": "Albums"
+    },
+    {
+      "artist": "Faye Webster",
+      "title": "Run and Tell",
+      "display_year": 2013,
+      "country": "us",
+      "source_url": "https://music.apple.com/us/artist/faye-webster/532412540",
+      "observed_sections": [
+        "Albums"
+      ],
+      "observed_on": "2026-11-03",
+      "features": {
+        "title_present": 1,
+        "single_word": 0,
+        "ep_word": 0,
+        "live_word": 0,
+        "performance_phrase": 0,
+        "greatest_hits_phrase": 0,
+        "best_of_phrase": 0,
+        "anthology_word": 0,
+        "compilation_word": 0,
+        "remix_word": 0
+      },
+      "scores": {
+        "Albums": 1.5,
+        "Singles & EPs": 0,
+        "Live Albums": 0.0,
+        "Compilations": 0.0,
+        "Others": 0
+      },
+      "candidate": "Albums",
+      "heuristic": "Albums"
+    },
+    {
+      "artist": "Faye Webster",
+      "title": "I CARE (FAYE WEBSTER VERSION) - Single",
+      "display_year": 2026,
+      "country": "us",
+      "source_url": "https://music.apple.com/us/artist/faye-webster/532412540",
+      "observed_sections": [
+        "Singles & EPs"
+      ],
+      "observed_on": "2026-11-03",
+      "features": {
+        "title_present": 1,
+        "single_word": 1,
+        "ep_word": 0,
+        "live_word": 0,
+        "performance_phrase": 0,
+        "greatest_hits_phrase": 0,
+        "best_of_phrase": 0,
+        "anthology_word": 0,
+        "compilation_word": 0,
+        "remix_word": 0
+      },
+      "scores": {
+        "Albums": 0.75,
+        "Singles & EPs": 3,
+        "Live Albums": -1.5,
+        "Compilations": -1.5,
+        "Others": 0
+      },
+      "candidate": "Singles & EPs",
+      "heuristic": "Singles & EPs"
+    },
+    {
+      "artist": "Faye Webster",
+      "title": "Make 'em Laugh - Single",
+      "display_year": 2024,
+      "country": "us",
+      "source_url": "https://music.apple.com/us/artist/faye-webster/532412540",
+      "observed_sections": [
+        "Singles & EPs"
+      ],
+      "observed_on": "2026-11-03",
+      "features": {
+        "title_present": 1,
+        "single_word": 1,
+        "ep_word": 0,
+        "live_word": 0,
+        "performance_phrase": 0,
+        "greatest_hits_phrase": 0,
+        "best_of_phrase": 0,
+        "anthology_word": 0,
+        "compilation_word": 0,
+        "remix_word": 0
+      },
+      "scores": {
+        "Albums": 0.75,
+        "Singles & EPs": 3,
+        "Live Albums": -1.5,
+        "Compilations": -1.5,
+        "Others": 0
+      },
+      "candidate": "Singles & EPs",
+      "heuristic": "Singles & EPs"
+    },
+    {
+      "artist": "Faye Webster",
+      "title": "After the First Kiss - Single",
+      "display_year": 2024,
+      "country": "us",
+      "source_url": "https://music.apple.com/us/artist/faye-webster/532412540",
+      "observed_sections": [
+        "Singles & EPs"
+      ],
+      "observed_on": "2026-11-03",
+      "features": {
+        "title_present": 1,
+        "single_word": 1,
+        "ep_word": 0,
+        "live_word": 0,
+        "performance_phrase": 0,
+        "greatest_hits_phrase": 0,
+        "best_of_phrase": 0,
+        "anthology_word": 0,
+        "compilation_word": 0,
+        "remix_word": 0
+      },
+      "scores": {
+        "Albums": 0.75,
+        "Singles & EPs": 3,
+        "Live Albums": -1.5,
+        "Compilations": -1.5,
+        "Others": 0
+      },
+      "candidate": "Singles & EPs",
+      "heuristic": "Singles & EPs"
+    },
+    {
+      "artist": "Faye Webster",
+      "title": "Car Therapy Sessions - EP",
+      "display_year": 2022,
+      "country": "us",
+      "source_url": "https://music.apple.com/us/artist/faye-webster/532412540",
+      "observed_sections": [
+        "Singles & EPs"
+      ],
+      "observed_on": "2026-11-03",
+      "features": {
+        "title_present": 1,
+        "single_word": 0,
+        "ep_word": 1,
+        "live_word": 0,
+        "performance_phrase": 0,
+        "greatest_hits_phrase": 0,
+        "best_of_phrase": 0,
+        "anthology_word": 0,
+        "compilation_word": 0,
+        "remix_word": 0
+      },
+      "scores": {
+        "Albums": 0.5,
+        "Singles & EPs": 4,
+        "Live Albums": -2.0,
+        "Compilations": -2.0,
+        "Others": 0
+      },
+      "candidate": "Singles & EPs",
+      "heuristic": "Singles & EPs"
+    }
+  ],
+  "synthetic_separate": {
+    "total": 25,
+    "candidate_matched": 20,
+    "heuristic_matched": 25,
+    "failures": [
+      {
+        "title": "The Best of Me",
+        "specification": "Albums",
+        "candidate": "Compilations",
+        "heuristic": "Albums"
+      },
+      {
+        "title": "Live Forever",
+        "specification": "Albums",
+        "candidate": "Live Albums",
+        "heuristic": "Albums"
+      },
+      {
+        "title": "Single Minded",
+        "specification": "Albums",
+        "candidate": "Singles & EPs",
+        "heuristic": "Albums"
+      },
+      {
+        "title": "EP Stories",
+        "specification": "Albums",
+        "candidate": "Singles & EPs",
+        "heuristic": "Albums"
+      },
+      {
+        "title": "Untitled Live",
+        "specification": "Albums",
+        "candidate": "Live Albums",
+        "heuristic": "Albums"
+      }
+    ]
+  }
+}

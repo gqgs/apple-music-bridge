@@ -69,7 +69,7 @@ form POST. Standard `c` and `v` parameters are required. Supported methods:
 - `getOpenSubsonicExtensions` (static public discovery only);
 - `search3`, `getArtists`, `getArtist`, `getArtistInfo2`, `getAlbum`, `getSong`;
 - `getAlbumList2` (`alphabeticalByName` and `newest`), empty read-only `getPlaylists`;
-- `getCoverArt` placeholder PNG and `stream` original completed-file bytes.
+- `getCoverArt` validated artwork or fallback PNG and `stream` original completed-file bytes.
 
 Use **search first**: empty queries, `getArtists` and album lists show only locally
 discovered metadata, not the entire Apple catalog or Apple personal library.
@@ -106,17 +106,52 @@ HLS or incremental download streaming. Client bitrate limits/format conversions
 are rejected instead of silently losing quality. Range seeks work only after full
 completion and depend on client/container behavior.
 
-## Artwork limitation (deliberately unresolved)
+## Artwork fetching and format
 
-`getCoverArt` authenticates and resolves the catalog ID but currently returns an
-original neutral PNG marked `X-Artwork-Status: placeholder`. It does **not** fetch
-Apple images. The current app's artwork approach requires an official badge and
-appropriate catalog association; a generic external client's layout cannot be
-controlled or verified by this adapter. Before enabling Apple covers, review the
-specific client's attribution/link support and applicable promotional artwork
-conditions. No unofficial badge, URL-rewriting trick or unapproved image reuse was
-added. Thus the artwork **protocol flow** works; real album covers are a blocker,
-not claimed complete. No legal/terms compliance conclusion is implied.
+Album and song covers use the returned public catalog artwork URL unchanged.
+Songs without their own URL resolve their album; artists without a verified
+portrait return the neutral placeholder (an album cover is not a portrait).
+Only HTTPS `isN-ssl.mzstatic.com` URLs on port 443 are accepted, including redirects.
+No URL, HTTP body or upstream diagnostic is printed. Authentication remains required.
+
+Two dedicated workers fetch covers outside the serialized catalog/media worker.
+Duplicate in-flight URLs share work; at most four HTTP callers wait for artwork,
+leaving server capacity for other requests. Each caller waits at most 20 seconds;
+fetches use 8-second socket timeouts, a 15-second read-loop deadline and a 2 MiB
+body cap. OS DNS resolution is not a hard wall-clock timeout; a stuck resolver can
+occupy an artwork worker but cannot occupy the catalog worker. Shutdown cancels
+queued artwork; already running workers finish subject to these limits.
+
+The existing safe image cache validates JPEG/PNG/WebP content and dimensions
+(maximum 2048 per side), then scales down to at most 256 pixels without upscaling.
+The bridge re-encodes decoded images as **PNG**, with `Content-Type: image/png`.
+This avoids relying on URL suffixes or sending unsupported source formats directly
+to clients. It uses existing PySide6 image codecs without a GUI/application window;
+catalog and classification logic remain independent of Qt. Supersonic's pinned Go
+client registers PNG and JPEG decoders. Missing, corrupt, denied or unsupported
+images return a neutral PNG with `X-Artwork-Status: placeholder`; successful covers
+use `available`. No specific cause is inferred from the user's earlier unknown-format
+error without its actual image bytes.
+
+The separate `artwork/` disk cache is bounded to 32 MiB/512 entries, uses hashed
+safe paths and atomic completion, recovers corrupt entries, and survives restart.
+It is additional to the media-cache limit. Transient network/server failures allow
+at most three attempts per URL per process, separated by at least 30 seconds;
+denials and invalid content are not automatically retried. Refresh the client after
+recovery; clients may cache placeholders independently.
+
+Apple's [iTunes Search API](https://performance-partners.apple.com/search-api)
+documents `artworkUrl100` as a 100×100 URL, returned only when available. It does
+not document rewriting `100x100bb.jpg` to request another size or format.
+[Apple Music API artwork templates](https://developer.apple.com/videos/play/wwdc2022/10148/)
+support `{w}`/`{h}` substitution, but are a different API contract. The bridge does
+not assume those templates or format negotiation apply to iTunes URLs; requesting
+`size` from this bridge does not manufacture higher-resolution source artwork.
+Live Apple responses and actual Supersonic display still need user testing; automated
+coverage uses synthetic JPEG, PNG, WebP, malformed bodies and mocked transports.
+
+Artwork terms assessment is deferred by the user. Enabling this feature does not
+assert compliance with Apple's promotional-use, badge or store-link conditions.
 
 ## Authentication and exposure
 
@@ -198,7 +233,5 @@ regressions use synthetic catalog data; this is not real-client UI validation.
 The actual client must be retested after restarting the bridge and refreshing its
 server/album data.
 
-Covers remain placeholders. Apple's [Search API usage conditions](https://performance-partners.apple.com/search-api)
-restrict promotional artwork use and require associated store promotion/linking;
-adding a badge alone is not a blanket permission. Enabling covers in an arbitrary
-client requires a separate assessment of its display and applicable conditions.
+Artwork fetching now replaces the initial placeholder-only implementation; see the
+format, safety and terms limitations above.

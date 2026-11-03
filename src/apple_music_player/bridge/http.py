@@ -14,9 +14,9 @@ import zlib
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
-from urllib import request
 
-from ..model import PlayerError
+from ..model import Artist, PlayerError, Track
+from .artwork import Covers
 from .core import BridgeError, Core
 
 EXTENSIONS = [
@@ -201,10 +201,19 @@ class ProtocolCore(Core):
                 "albumList2": {"album": [self.describe(a) for a in albums[offset : offset + count]]}
             }
         if method == "getCoverArt":
-            album = self.resolve(params.get("id", ""), "album")
-            artwork_url = album.artwork_url.replace("100x100bb.jpg","400x400bb.jpg")
-            print("artwork_url", artwork_url)
-            return request.urlopen(artwork_url).read()
+            item = self.resolve(params.get("id", ""))
+            if isinstance(item, Artist):
+                return ""  # Public artist metadata has no verified portrait URL.
+            if isinstance(item, Track) and not item.artwork_url and item.album_id:
+                try:
+                    item = self.resolve(
+                        f"am:{item.country}:{self.quality}:album:{item.album_id}", "album"
+                    )
+                except BridgeError as exc:
+                    if exc.code != 70:
+                        raise
+                    return ""
+            return item.artwork_url
         if method == "getPlaylists":
             return {"playlists": {"playlist": []}}
         raise BridgeError(0, "Endpoint not implemented by this read-only proof of concept")
@@ -394,7 +403,16 @@ class Handler(BaseHTTPRequestHandler):
                 else self.server.actor.call("dispatch", method, params)
             )
             if method == "getCoverArt":
-                self.reply(200, payload, "image/jpeg")
+                image = self.server.covers.get(payload)
+                self.reply(
+                    200,
+                    image or placeholder(),
+                    "image/png",
+                    {
+                        "X-Artwork-Status": "available" if image else "placeholder",
+                        "Cache-Control": "private, max-age=86400" if image else "no-store",
+                    },
+                )
                 return
             self.api_response(payload, fmt)
         except BridgeError as exc:
@@ -442,8 +460,17 @@ class Server(ThreadingHTTPServer):
     def __init__(self, actor, credentials, port=4533, quality="lossless"):
         self.actor, self.credentials, self.quality = actor, credentials, quality
         self.slots = threading.BoundedSemaphore(8)
-        super().__init__(("127.0.0.1", port), Handler)
+        self.covers = Covers(actor.core.cache.root / "artwork")
+        try:
+            super().__init__(("127.0.0.1", port), Handler)
+        except Exception:
+            self.covers.close()
+            raise
         self.hosts = {f"127.0.0.1:{self.server_port}", f"localhost:{self.server_port}"}
+
+    def server_close(self):
+        self.covers.close()
+        super().server_close()
 
     def process_request(self, request, client_address):
         if not self.slots.acquire(blocking=False):

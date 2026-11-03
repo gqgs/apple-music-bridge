@@ -46,8 +46,12 @@ def allowed_url(url):
 class ArtworkRedirect(HTTPRedirectHandler):
     max_redirections = 3
 
+    def __init__(self, validator=allowed_url):
+        super().__init__()
+        self.validator = validator
+
     def redirect_request(self, req, fp, code, msg, headers, newurl):
-        if not allowed_url(newurl):
+        if not self.validator(newurl):
             raise ValueError("Unsafe artwork redirect")
         return super().redirect_request(req, fp, code, msg, headers, newurl)
 
@@ -76,8 +80,9 @@ def decode(data):
 
 
 class ArtworkCache:
-    def __init__(self, root, limit=32 * 1024**2):
+    def __init__(self, root, limit=32 * 1024**2, validator=allowed_url):
         self.root = private_dir(root)
+        self.allowed_url = validator
         self.limit = limit
         self.lock = threading.Lock()
         self.failures = {}
@@ -103,7 +108,7 @@ class ArtworkCache:
             path.unlink()
 
     def load(self, url):
-        if not allowed_url(url):
+        if not self.allowed_url(url):
             return QImage()
         path = self.root / (sha256(url.encode()).hexdigest() + ".img")
         try:
@@ -122,12 +127,12 @@ class ArtworkCache:
                     except (ValueError, OSError):
                         pass
                     path.unlink()
-            opener = build_opener(ArtworkRedirect())
+            opener = build_opener(ArtworkRedirect(self.allowed_url))
             request = Request(
                 url, headers={"User-Agent": "NativeMusicPlayer/0.1", "Accept": "image/*"}
             )
             with opener.open(request, timeout=8) as response:
-                if not allowed_url(response.url):
+                if not self.allowed_url(response.url):
                     raise ValueError("Unsafe redirect")
                 if response.headers.get_content_type() not in (
                     "image/png",

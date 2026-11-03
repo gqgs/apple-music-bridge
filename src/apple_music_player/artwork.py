@@ -2,12 +2,14 @@
 
 import os
 import re
+import ssl
 import tempfile
 import threading
 import time
 from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor
 from hashlib import sha256
+from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
@@ -78,6 +80,7 @@ class ArtworkCache:
         self.root = private_dir(root)
         self.limit = limit
         self.lock = threading.Lock()
+        self.failures = {}
         with self.lock:
             for path in self.root.glob(".part-*"):
                 safe_path(self.root, path)
@@ -105,6 +108,7 @@ class ArtworkCache:
         path = self.root / (sha256(url.encode()).hexdigest() + ".img")
         try:
             with self.lock:
+                self.failures.pop(url, None)
                 safe_path(self.root, path)
                 if path.exists():
                     if path.stat().st_nlink != 1:
@@ -124,19 +128,19 @@ class ArtworkCache:
             )
             with opener.open(request, timeout=8) as response:
                 if not allowed_url(response.url):
-                    return QImage()
+                    raise ValueError("Unsafe redirect")
                 if response.headers.get_content_type() not in (
                     "image/png",
                     "image/jpeg",
                     "image/webp",
                 ):
-                    return QImage()
+                    raise ValueError("Unsupported media type")
                 chunks, size = [], 0
                 deadline = time.monotonic() + 15
                 read = getattr(response, "read1", response.read)
                 while size <= MAX_BYTES:
                     if time.monotonic() > deadline:
-                        return QImage()
+                        raise TimeoutError()
                     chunk = read(min(65536, MAX_BYTES + 1 - size))
                     if not chunk:
                         break
@@ -157,8 +161,26 @@ class ArtworkCache:
                         if os.path.exists(temporary):
                             os.unlink(temporary)
             return image
+        except HTTPError as exc:
+            code = exc.code
+            exc.close()
+            reason = "denied" if code in (401, 403) else "server" if 500 <= code < 600 else "http"
+        except URLError as exc:
+            # A proxy CONNECT rejection may arrive wrapped as URLError rather than HTTPError.
+            reason = "denied" if re.search(r"\b(401|403)\b", str(exc.reason)) else "network"
+            if isinstance(exc.reason, ssl.SSLError):
+                reason = "tls"
+        except (TimeoutError, ConnectionError):
+            reason = "network"
+        except ssl.SSLError:
+            reason = "tls"
+        except ValueError:
+            reason = "invalid"
         except Exception:
-            return QImage()  # Never expose response bodies, URLs or network diagnostics.
+            reason = "unavailable"
+        with self.lock:
+            self.failures[url] = reason
+        return QImage()  # Never expose response bodies, URLs or network diagnostics.
 
 
 class Artwork:
@@ -169,25 +191,70 @@ class Artwork:
         self.images = OrderedDict()
         self.closed = False
         self.revision = 0
+        self.failures = {}
+        self.attempts = {}
 
     def get(self, url):
         if self.closed or not allowed_url(url):
             return QImage()
+        if url in self.failures:
+            return QImage()
         if url in self.images:
             self.images.move_to_end(url)
             return self.images[url]
-        if url not in self.pending and len(self.pending) < 16:
+        if url not in self.pending and len(self.pending) < 16 and len(self.failures) < 256:
+            self.attempts[url] = self.attempts.get(url, 0) + 1
             self.pending[url] = self.pool.submit(self.cache.load, url)
         return QImage()
 
     def poll(self):
         for url, future in list(self.pending.items()):
             if future.done():
-                self.images[url] = future.result()
+                result = future.result()
+                if result.isNull():
+                    reason = self.cache.failures.get(url, "unavailable")
+                    self.failures[url] = (reason, time.monotonic() + 30)
+                else:
+                    self.images[url] = result
+                    self.attempts.pop(url, None)
                 del self.pending[url]
                 self.revision += 1
         while len(self.images) > 64:
             self.images.popitem(last=False)
+
+    def retryable(self):
+        now = time.monotonic()
+        return [
+            url
+            for url, (reason, after) in self.failures.items()
+            if reason in {"network", "server"} and now >= after and self.attempts.get(url, 0) < 3
+        ]
+
+    def retry_failed(self):
+        # Explicit user action only: initial request plus at most two retries per session.
+        for url in self.retryable():
+            del self.failures[url]
+        self.revision += 1
+
+    def status(self):
+        failure = self.failures.get(BADGE_URL)
+        if failure:
+            reason = failure[0]
+            messages = {
+                "denied": "Store badge access denied (HTTP 401/403); covers remain placeholders.",
+                "network": "Store badge network failure; retry is available after 30 seconds.",
+                "server": "Store badge server failure; retry is available after 30 seconds.",
+                "tls": "Store badge TLS verification failed; covers remain placeholders.",
+                "invalid": "Store badge response was invalid; covers remain placeholders.",
+                "http": "Store badge HTTP request failed; covers remain placeholders.",
+                "unavailable": "Store badge unavailable; covers remain placeholders.",
+            }
+            if reason in {"network", "server"} and self.attempts.get(BADGE_URL, 0) >= 3:
+                return "Store badge retry limit reached; covers remain placeholders."
+            return messages[reason]
+        if self.failures:
+            return "Some artwork is unavailable. Transient failures allow two retries per session."
+        return ""
 
     def close(self):
         self.closed = True

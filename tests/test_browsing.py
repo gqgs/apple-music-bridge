@@ -287,3 +287,133 @@ def test_release_artist_bound_and_navigation_cancels_deferred_work(app, tmp_path
     window.pages.setCurrentIndex(0)
     window.close()
     assert not window.catalog_timer.isActive() and window.artwork.closed
+
+
+def test_artwork_failure_categories_manual_recovery_and_no_403_retry(tmp_path, monkeypatch):
+    from urllib.error import HTTPError, URLError
+
+    from apple_music_player.artwork import Artwork
+
+    now = [100.0]
+    monkeypatch.setattr("apple_music_player.artwork.time.monotonic", lambda: now[0])
+    calls = []
+    failure = [URLError(TimeoutError())]
+
+    def opened(request, **kwargs):
+        calls.append(request.full_url)
+        if failure[0]:
+            raise failure[0]
+        result = io.BytesIO(png())
+        result.url = request.full_url
+        result.headers = Message()
+        result.headers["Content-Type"] = "image/png"
+        return result
+
+    monkeypatch.setattr(
+        "apple_music_player.artwork.build_opener", lambda *_: SimpleNamespace(open=opened)
+    )
+    art = Artwork(tmp_path / "art")
+    try:
+        art.get(BADGE_URL)
+        art.pending[BADGE_URL].result(timeout=2)
+        art.poll()
+        assert "network" in art.status()
+        assert not art.retryable()
+        art.get(BADGE_URL)
+        assert len(calls) == 1
+        now[0] += 31
+        assert art.retryable() == [BADGE_URL]
+        failure[0] = None
+        art.retry_failed()
+        art.get(BADGE_URL)
+        art.pending[BADGE_URL].result(timeout=2)
+        art.poll()
+        assert not art.get(BADGE_URL).isNull() and not art.status()
+        assert len(calls) == 2
+    finally:
+        art.close()
+    failure[0] = HTTPError(BADGE_URL, 403, "PRIVATE_RESPONSE", {}, None)
+    art = Artwork(tmp_path / "denied")
+    try:
+        art.get(BADGE_URL)
+        art.pending[BADGE_URL].result(timeout=2)
+        art.poll()
+        assert "401/403" in art.status() and "PRIVATE" not in art.status()
+        for _ in range(5):
+            now[0] += 1000
+            art.retry_failed()
+            art.get(BADGE_URL)
+            art.poll()
+        assert len(calls) == 3 and not art.retryable()
+    finally:
+        art.close()
+
+
+def test_artwork_retry_limit_and_proxy_denial(tmp_path, monkeypatch):
+    from urllib.error import URLError
+
+    from apple_music_player.artwork import Artwork
+
+    now = [100.0]
+    monkeypatch.setattr("apple_music_player.artwork.time.monotonic", lambda: now[0])
+    calls = []
+
+    def opened(*args, **kwargs):
+        calls.append(1)
+        raise URLError("Tunnel connection failed: 403 Forbidden")
+
+    monkeypatch.setattr(
+        "apple_music_player.artwork.build_opener", lambda *_: SimpleNamespace(open=opened)
+    )
+    cache = ArtworkCache(tmp_path / "proxy")
+    assert cache.load(BADGE_URL).isNull()
+    assert cache.failures[BADGE_URL] == "denied"
+    art = Artwork(tmp_path / "retry")
+
+    def transient(url):
+        calls.append(1)
+        art.cache.failures[url] = "server"
+        return QImage()
+
+    monkeypatch.setattr(art.cache, "load", transient)
+    try:
+        for attempt in range(3):
+            art.get(BADGE_URL)
+            art.pending[BADGE_URL].result(timeout=2)
+            art.poll()
+            now[0] += 31
+            if attempt < 2:
+                assert art.retryable()
+                art.retry_failed()
+        assert not art.retryable() and "limit reached" in art.status()
+        art.retry_failed()
+        art.get(BADGE_URL)
+        assert len(calls) == 4
+    finally:
+        art.close()
+
+
+def test_populated_home_fits_short_viewport_with_scroll_and_visible_transport(
+    app, tmp_path, monkeypatch
+):
+    window = Window(tmp_path / "cache")
+    window.startup_attempted = True
+    window.timer.stop()
+    monkeypatch.setattr(window, "refresh_releases", lambda: None)
+    monkeypatch.setattr(window.controller, "tick", lambda: None)
+    window.show()
+    app.processEvents()
+    albums = [Album("br", str(n), "Synthetic album", artist="Fixture") for n in range(3)]
+    window.recent_shelf.set_albums(albums, "")
+    window.release_shelf.set_albums(albums, "")
+    # 480 logical pixels leaves desktop decoration space on a 768px screen at 150%.
+    window.resize(1024, 480)
+    app.processEvents()
+    assert window.height() == 480
+    assert window.home_scroll.verticalScrollBar().maximum() > 0
+    assert window.pause_button.isVisible()
+    assert window.pause_button.mapTo(window, window.pause_button.rect().bottomLeft()).y() < 480
+    bar = window.home_scroll.verticalScrollBar()
+    bar.setValue(bar.maximum())
+    assert bar.value() > 0
+    window.close()

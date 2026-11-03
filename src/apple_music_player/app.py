@@ -22,6 +22,7 @@ from PySide6.QtWidgets import (
     QMainWindow,
     QMessageBox,
     QPushButton,
+    QScrollArea,
     QSlider,
     QTabWidget,
     QVBoxLayout,
@@ -126,6 +127,16 @@ class Window(QMainWindow):
         self.backend_status.setTextFormat(Qt.PlainText)
         self.backend_status.setWordWrap(True)
         layout.addWidget(self.backend_status)
+        artwork_row = QHBoxLayout()
+        self.artwork_status = QLabel()
+        self.artwork_status.setWordWrap(True)
+        self.artwork_status.hide()
+        artwork_row.addWidget(self.artwork_status, 1)
+        self.artwork_retry = QPushButton("Retry artwork")
+        self.artwork_retry.hide()
+        self.artwork_retry.clicked.connect(self.artwork.retry_failed)
+        artwork_row.addWidget(self.artwork_retry)
+        layout.addLayout(artwork_row)
         root_layout = layout
         self.pages = QTabWidget()
         root_layout.addWidget(self.pages, 1)
@@ -149,9 +160,15 @@ class Window(QMainWindow):
         self.button(actions, "Refresh releases", self.refresh_releases)
         self.button(actions, "Clear local history", self.clear_history)
         home_layout.addLayout(actions)
-        self.pages.addTab(home, "Home")
+        self.home_scroll = QScrollArea()
+        self.home_scroll.setWidgetResizable(True)
+        self.home_scroll.setWidget(home)
+        self.pages.addTab(self.home_scroll, "Home")
         search_page = QWidget()
-        self.pages.addTab(search_page, "Search")
+        search_scroll = QScrollArea()
+        search_scroll.setWidgetResizable(True)
+        search_scroll.setWidget(search_page)
+        self.pages.addTab(search_scroll, "Search")
         layout = QVBoxLayout(search_page)
         catalog_note = QLabel("Search public iTunes metadata · Apple Music availability may differ")
         layout.addWidget(catalog_note)
@@ -643,6 +660,10 @@ class Window(QMainWindow):
 
     def tick(self):
         self.artwork.poll()
+        self.artwork_status.setText(self.artwork.status())
+        self.artwork_status.setVisible(bool(self.artwork_status.text()))
+        self.artwork_retry.setVisible(bool(self.artwork.failures))
+        self.artwork_retry.setEnabled(bool(self.artwork.retryable()))
         self.update_home()
         self.refresh_artwork()
         if not self.country.text() and not self.country.hasFocus() and self.backend_storefront():

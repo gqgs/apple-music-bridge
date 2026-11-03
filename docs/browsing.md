@@ -9,3 +9,13 @@ Search, album details and now playing use returned artwork URLs without undocume
 Artwork is promotional material. Cards provide direct store links. Covers are displayed only when the approved iTunes badge has loaded; otherwise neutral placeholders and text links remain. The official badge download was blocked with HTTP 403 in the development environment, so live badge/artwork delivery is not claimed validated. No substitute Apple branding is bundled.
 
 Sources: [Search API and promotional-content conditions](https://performance-partners.apple.com/search-api), [official badge guidelines](https://marketing.services.apple/itunes-identity-guidelines). Tests use synthetic images and metadata. `home-smoke.png` and `browsing-search-smoke.png` show neutral synthetic fixtures, not account data or live artwork.
+
+## Retry and small-screen follow-up
+
+Transient artwork network failures and HTTP 5xx responses now expose a **Retry artwork** action after 30 seconds, capped at two retries following the initial request. HTTP 401/403 (including recognized proxy CONNECT denials), other HTTP errors, TLS verification failures and invalid images do not enter this retry path. Fixed messages distinguish these categories without raw URLs, response bodies or exception text. There is no automatic retry loop. The per-session failure set is bounded to 256 URLs.
+
+The original badge attempt was recorded as a 403 during tunnel establishment; the complete original exception/headers were not retained, so an origin response cannot be established. The URL came from the image link under section 1.1 of the official guidelines, not from a verified asset download. No denied request was retried during this fix.
+
+**Outstanding draft review:** the current per-card badge placement conflicts with section 1.4's one-badge-per-layout guidance. The Search API also requires artwork proximity to a badge. This follow-up does not assert that the current display model is approved and does not remove the badge gate; placement needs resolution before merging the artwork feature.
+
+With both Home shelves populated, the old layout forced a 1019px minimum window height. Home and Search now scroll vertically, keeping transport controls outside the scrolled area. `home-small-screen-smoke.png` is a synthetic 480-logical-pixel viewport rendered at 150% scale (720 physical pixels); both shelves are populated and reachable by scrolling. No live artwork is shown.

@@ -20,6 +20,10 @@ The client can display its own neutral fallback.
    lookup, including the returned `artistLinkUrl`/`artistViewUrl` when it validates
    against the same numeric Apple ID. Fixed countryless/current-country/US URL
    forms are identity references, not Apple catalog requests or region remapping.
+   Include canonical iTunes URLs for US, the selected storefront and the validated
+   returned URL's country: `https://itunes.apple.com/<country>/artist/id<ID>`.
+   MusicBrainz stores these with the `id` prefix and matches URLs exactly; a
+   countryless or slugged link alone is insufficient.
 2. Accept exactly one linked MusicBrainz artist MBID. No name search, fuzzy matching,
    scraping, user credentials, or assumption that Apple IDs equal MBIDs.
 3. Prefer a Commons **image** relationship from that artist. Otherwise follow a
@@ -145,3 +149,21 @@ respect Retry-After. The bridge does not implement client retries. Missing match
 remain negatively cached for a day; repeatedly requesting them does not query the
 provider again. Live provider resolution remains unverified in this environment:
 a MusicBrainz API attempt was blocked by the environment proxy (tunnel HTTP 403).
+
+### Canonical iTunes identity correction
+
+The original experiment omitted canonical US/current-storefront iTunes URLs and
+incorrectly removed `id` while normalizing a returned iTunes artist URL. This could
+produce `identity-missing` for an artist whose only matching relationship used that
+canonical URL. The corrected forms join the same multi-resource request; there are
+no extra requests or name-based matching. The URL set is part of the cache key, so
+old negative entries cannot suppress the corrected lookup. Existing files remain
+subject to normal cache eviction; no manual cache deletion is needed.
+
+Source evidence:
+[MusicBrainz iTunes normalization](https://github.com/metabrainz/musicbrainz-server/blob/1bedfed82b794a23ced029d397da01f2bd4d4256/root/static/scripts/edit/URLCleanup.js#L3611)
+and [exact URL lookup](https://github.com/metabrainz/musicbrainz-server/blob/1bedfed82b794a23ced029d397da01f2bd4d4256/lib/MusicBrainz/Server/Data/URL.pm#L337).
+Tests model these URL forms and provider response structure through search,
+getArtists, getCoverArt and full restart, including a pre-existing negative cache.
+They do not prove live coverage for a particular artist, missing relationships in
+other countries, or the identity selected by an anonymous diagnostic probe.

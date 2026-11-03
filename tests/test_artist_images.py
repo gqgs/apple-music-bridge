@@ -504,3 +504,126 @@ def test_missing_direct_image_credits_reason_is_preserved(monkeypatch):
     with pytest.raises(mod.Missing) as error:
         mod.resolve(ARTIST, threading.Event())
     assert error.value.reason == "attribution-unavailable"
+
+
+@pytest.mark.parametrize("country", ["us", "br", "gb"])
+def test_itunes_canonical_forms_keep_country_and_id_prefix(country):
+    artist = replace(
+        ARTIST, store_url=f"https://itunes.apple.com/{country}/artist/fixture/id1?uo=4"
+    )
+    urls = mod.resources(artist)
+    assert f"https://itunes.apple.com/{country}/artist/id1" in urls
+    assert "https://itunes.apple.com/us/artist/id1" in urls
+    assert "https://itunes.apple.com/br/artist/id1" in urls
+    assert f"https://itunes.apple.com/{country}/artist/1" not in urls
+    assert len(urls) == len(set(urls)) and len(urls) < 12
+
+
+@pytest.mark.parametrize("country", ["us", "br", "gb"])
+def test_search_gallery_portrait_canonical_itunes_and_restart(tmp_path, monkeypatch, country):
+    import time
+    from contextlib import contextmanager
+    from hashlib import sha256
+
+    from PySide6.QtGui import QImage
+    from test_bridge import KEY
+
+    from apple_music_player.bridge.core import Actor
+    from apple_music_player.bridge.http import ProtocolCore, Server
+    from apple_music_player.catalog import Catalog
+
+    # Synthetic artist; URL forms and relationship shape follow MusicBrainz source.
+    store_url = f"https://itunes.apple.com/{country}/artist/fixture/id1?uo=4"
+    rows = [
+        {
+            "wrapperType": "artist",
+            "artistId": 1,
+            "artistName": "Fixture",
+            "artistLinkUrl": store_url,
+        }
+    ]
+
+    class FixtureCatalog(Catalog):
+        def search(self, query, country, entity="song", *, limit=None):
+            assert entity == "musicArtist" and country == "br"
+            return self.artists(rows, country)
+
+    calls = provider(monkeypatch)
+    original = mod.fetch
+    canonical = f"https://itunes.apple.com/{country}/artist/id1"
+
+    def source_fetch(url, stop, image=False):
+        if urlsplit(url).path == "/ws/2/url":
+            resources = parse_qs(urlsplit(url).query)["resource"]
+            if canonical not in resources:
+                return b'{"urls": [], "url-count": 0, "url-offset": 0}'
+            data = json.loads(original(url, stop, image=image))
+            data["urls"][0]["resource"] = canonical
+            return json.dumps(data).encode()
+        return original(url, stop, image=image)
+
+    monkeypatch.setattr(mod, "fetch", source_fetch)
+
+    @contextmanager
+    def running():
+        actor = Actor(
+            lambda cancel: ProtocolCore(
+                tmp_path / "cache",
+                1024**2,
+                catalog=FixtureCatalog(),
+                cancel=cancel,
+                artist_images=True,
+            )
+        )
+        server = Server(actor, {"username": "bridge", "key": KEY}, port=0)
+        thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.02})
+        thread.start()
+        try:
+            yield server
+        finally:
+            actor.cancel.set()
+            server.shutdown()
+            server.server_close()
+            thread.join()
+            actor.close()
+
+    with running() as server:
+        found = payload(
+            server,
+            "search3",
+            {"query": "fixture", "artistCount": "1", "albumCount": "0", "songCount": "0"},
+        )["searchResult3"]["artist"][0]
+        known = payload(server, "getArtists")["artists"]["index"][0]["artist"][0]
+        assert known == found
+        artist = server.actor.core.cached_artist(known["id"])
+        assert artist.store_url == store_url
+        old_resources = list(
+            dict.fromkeys(
+                [
+                    "https://music.apple.com/artist/1",
+                    "https://itunes.apple.com/artist/id1",
+                    "https://music.apple.com/br/artist/1",
+                    "https://music.apple.com/us/artist/1",
+                    store_url.split("?")[0],
+                    f"https://itunes.apple.com/{country}/artist/1",
+                ]
+            )
+        )
+        old_key = sha256(json.dumps(["br", "1", old_resources]).encode()).hexdigest()
+        server.artist_images.write(
+            old_key,
+            {"status": "missing", "reason": "identity-missing", "until": time.time() + 86400},
+        )
+        assert old_key != server.artist_images.key(artist)
+        response = request(server, "getCoverArt", {"id": known["coverArt"]})
+        assert response[0] == 200 and not QImage.fromData(response[2]).isNull()
+        assert len(calls) == 4  # One multi-resource request, not extra per-URL requests.
+        assert (server.artist_images.root / (old_key + ".json")).exists()
+
+    with running() as server:
+        restored = payload(server, "getArtists")["artists"]["index"][0]["artist"][0]
+        assert restored == known
+        assert server.actor.core.cached_artist(restored["id"]).store_url == store_url
+        response = request(server, "getCoverArt", {"id": restored["coverArt"]})
+        assert response[0] == 200 and not QImage.fromData(response[2]).isNull()
+        assert len(calls) == 4  # Positive cache survives full server/SQLite restart.

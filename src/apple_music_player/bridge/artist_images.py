@@ -78,7 +78,9 @@ def resources(artist):
     ]
     # Use an actual returned Apple artist URL when available, but never arbitrary
     # external resources or a name inferred from another catalog's search result.
+    countries = {"us"}
     if re.fullmatch(r"[a-z]{2}", artist.country):
+        countries.add(artist.country)
         result.append(f"https://music.apple.com/{artist.country}/artist/{artist.id}")
     # US links are common in MusicBrainz; this is an identity reference only,
     # never an Apple catalog/media request or storefront remapping.
@@ -99,10 +101,17 @@ def resources(artist):
         ):
             result.append(p._replace(query="", fragment="").geturl())
             country = p.path.split("/")[1]
-            if re.fullmatch(r"[a-z]{2}", country):
-                result.append(f"https://{p.hostname}/{country}/artist/{artist.id}")
+            country = country if re.fullmatch(r"[a-z]{2}", country) else "us"
+            countries.add(country)
+            prefix = "id" if p.hostname == "itunes.apple.com" else ""
+            result.append(f"https://{p.hostname}/{country}/artist/{prefix}{artist.id}")
     except ValueError:
         pass
+    # MusicBrainz canonicalizes iTunes URLs with both country and id prefix.
+    # Its URL lookup compares stored URLs exactly; it does not follow Apple redirects.
+    for country in sorted(countries):
+        result.append(f"https://itunes.apple.com/{country}/artist/id{artist.id}")
+        result.append(f"https://music.apple.com/{country}/artist/{artist.id}")
     return list(dict.fromkeys(result))
 
 

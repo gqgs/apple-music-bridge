@@ -422,7 +422,7 @@ class Actor:
     def call(self, method, *args, **kwargs):
         return self.pool.submit(getattr(self.core, method), *args, **kwargs).result()
 
-    def metadata(self, method, params, timeout=20):
+    def metadata(self, method, params, timeout=12):
         if not self.metadata_pending.acquire(blocking=False):
             self.metrics.record("metadata_queue", "busy")
             raise BridgeError(0, "Catalog busy; retry later")

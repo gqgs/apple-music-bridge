@@ -355,3 +355,49 @@ def test_parallel_deferrals_keep_deadlines_and_admission_bounded(tmp_path):
         assert actor.core.operation_deadline is None
     finally:
         actor.close()
+
+
+def test_typing_burst_returns_protocol_responses_before_client_timeout(bridge, monkeypatch):
+    """Exact typing sequence, real limiter/HTTP, synthetic public responses only."""
+    import time
+
+    from apple_music_player.catalog import Catalog
+
+    server, _ = bridge
+    server.actor.core.catalog = Catalog()
+    starts = []
+
+    def opened(url, timeout):
+        params = parse_qs(urlsplit(url).query)
+        query, entity = params["term"][0], params["entity"][0]
+        starts.append((query, entity, time.monotonic()))
+        rows = []
+        if entity == "musicArtist":
+            rows = [dict(wrapperType="artist", artistType="Artist", artistId=1, artistName=query)]
+        return io.BytesIO(json.dumps({"results": rows}).encode())
+
+    monkeypatch.setattr("apple_music_player.catalog.urlopen", opened)
+    queries = ("b", "bj", "bjo", "bjor")
+
+    def search(query):
+        started = time.monotonic()
+        result = payload(server, "search3", {"query": query})
+        return result, time.monotonic() - started
+
+    with ThreadPoolExecutor(4) as pool:
+        futures = []
+        for query in queries:
+            futures.append(pool.submit(search, query))
+            threading.Event().wait(0.25)  # Just beyond the client's 200ms debounce.
+        results = [future.result(timeout=15) for future in futures]
+    for query, (result, seconds) in zip(queries, results, strict=True):
+        assert seconds < 14.5  # Default Supersonic request deadline is 15s.
+        if result["status"] == "ok":
+            assert result["searchResult3"]["artist"][0]["name"] == query
+        else:
+            assert result["error"]["code"] == 0
+            assert "Catalog" in result["error"]["message"]
+    assert any(result["status"] == "failed" for result, _ in results)
+    assert all(b[2] - a[2] >= 2.99 for a, b in zip(starts, starts[1:], strict=False))
+    assert {query for query, _, _ in starts} <= set(queries)
+    assert payload(server, "ping")["status"] == "ok"

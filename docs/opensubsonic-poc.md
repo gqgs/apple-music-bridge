@@ -302,7 +302,7 @@ calls. This is a scheduling model, not measured live Apple latency. Album expans
 adds more requests; network time is additional. No parallel upstream requests,
 rate-limit bypass, hidden result-type omission or inferred query cancellation is used.
 
-Each admitted HTTP metadata operation now has a 20-second deadline including its
+Each admitted HTTP metadata operation now has a 12-second deadline including its
 queue wait. Expired queued tasks skip dispatch and retain their admission slots until drained
 (to bound the executor queue even during a stalled upstream request); running work checks the deadline
 before/after upstream calls and before cooldown sleeps, so it does not proceed to
@@ -394,7 +394,7 @@ claim complete or authoritative release categorization.
 Catalog cooldown and HTTP 429 deferrals now wait outside the sole catalog/cache
 worker. A warm artist lookup can finish while a cold search waits for its next
 public request. Each logical RPC keeps one of four admission slots and its original
-20-second deadline across retries. Completed catalog responses are reused on retry;
+12-second deadline across retries. Completed catalog responses are reused on retry;
 expired queued work is drained before releasing admission. Shutdown interrupts waits.
 The same shared three-second spacing and upstream Retry-After remain enforced.
 
@@ -415,3 +415,29 @@ and a blocking upstream network call (15-second socket timeout) can still occupy
 worker. Supersonic's additional artist/album lookups add demand. Live client retesting
 is required; cumulative maxima cannot attribute a timeout to a specific query, and
 the reported successful cover fetches do not establish artwork as the cause.
+
+
+### Rapid typing remains a client integration problem
+
+Source inspection of Supersonic fork commit
+[`95df47f`](https://github.com/gqgs/supersonic/tree/95df47fea0e8e232047444b35c7617a2865157f6)
+found a 200ms SearchEntry debounce, a separate goroutine per search, and generation
+checks on returned UI results rather than HTTP cancellation. Its configured default
+HTTP timeout is 15 seconds. Four cold queries (`b`, `bj`, `bjo`, `bjor`) may require
+12 public catalog requests, at least 33 seconds between the first and last starts.
+Worker fairness does not remove that upstream capacity limit.
+
+The bridge metadata deadline is now 12 seconds, below that client default, so it
+can return a structured error before the client abandons the response. This is a
+bounded failure improvement, **not a fix for superseded search traffic**. Different
+client timeout settings or a blocked local HTTP writer can still time out. Already
+running upstream I/O is not forcibly interrupted; expired dispatch stops before
+starting another entity request.
+
+The bridge deliberately does not cancel queries based on `c`, the account, localhost,
+or query prefixes: different windows/clients may share all of those. A complete
+integration needs client-side search-on-submit/debouncing and per-view cancellation,
+plus a reliable cancellation signal (or explicit random per-view session ID and
+monotonic generation) to retire server-side work. Merely hiding old UI results or
+raising the HTTP timeout is insufficient. No new session protocol is silently
+assumed here, and no Supersonic source was copied into this project.

@@ -127,6 +127,7 @@ class Window(QMainWindow):
         self.catalog_timer.timeout.connect(self.resume_catalog)
         self.generation = 0
         self.results = []
+        self.result_indices = {}
         self.last_search_diagnostics = None
         self.last_artist_diagnostics = None
         self.displayed_artist_diagnostics = None
@@ -377,9 +378,9 @@ class Window(QMainWindow):
         self.request_catalog(self.catalog.album, album.id, album.country, album_title=album.title)
 
     def result_index(self, row):
-        item = self.result_list.item(row)
-        index = item.data(Qt.UserRole) if item else None
-        return row if index is None else index
+        # Keep navigation identity in Python. Repeated reads of unset Qt data roles
+        # trigger a PySide None refcount failure on Python 3.11.
+        return self.result_indices.get(row, row)
 
     def show_selected_album(self, row):
         row = self.result_index(row)
@@ -637,6 +638,7 @@ class Window(QMainWindow):
             self.catalog_future = None
         if clear:
             self.results = []
+            self.result_indices.clear()
             self.displayed_search_diagnostics = None
             self.displayed_artist_diagnostics = None
             self.show_album_header()
@@ -882,6 +884,7 @@ class Window(QMainWindow):
                         )
                         self.play_album_button.setEnabled(bool(self.album_tracks))
                         self.show_album_header()
+                        self.result_indices.clear()
                         self.result_list.clear()
                         if self.album_header.album:
                             multiple_discs = any(track.disc_number > 1 for track in self.results)
@@ -899,14 +902,16 @@ class Window(QMainWindow):
                             for group, albums_in_group in grouped_releases(self.results):
                                 heading = QListWidgetItem(group)
                                 heading.setFlags(Qt.ItemIsEnabled)
-                                heading.setData(Qt.UserRole, -1)
+                                self.result_indices[self.result_list.count()] = -1
                                 font = heading.font()
                                 font.setBold(True)
                                 heading.setFont(font)
                                 self.result_list.addItem(heading)
                                 for album in albums_in_group:
                                     item = QListWidgetItem(album.title)
-                                    item.setData(Qt.UserRole, self.results.index(album))
+                                    self.result_indices[self.result_list.count()] = (
+                                        self.results.index(album)
+                                    )
                                     set_artwork_icon(item, QImage())
                                     self.result_list.addItem(item)
                         else:

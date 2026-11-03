@@ -44,8 +44,9 @@ def test_real_qt_spacing_search_to_album_keeps_results(app, tmp_path, monkeypatc
     window = Window(tmp_path / "cache")
     window.show()
     try:
-        assert window.search_kind.currentData() == "album"
+        assert window.search_kind.currentData() == "musicArtist"
         assert window.country.text() == "br"
+        window.search_kind.setCurrentIndex(window.search_kind.findData("album"))
         QTest.keyClicks(window.search, "daughter if you leave")
         QTest.keyClick(window.search, Qt.Key_Return)
         wait_until(pump(app, window, lambda: len(window.results) == 1))
@@ -153,6 +154,6 @@ def test_saved_storefront_is_not_migrated_to_br(app, tmp_path, saved):
     window = Window(root)
     try:
         assert window.country.text() == saved
-        assert window.search_kind.currentData() == "album"
+        assert window.search_kind.currentData() == "musicArtist"
     finally:
         window.close()

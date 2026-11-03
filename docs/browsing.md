@@ -26,7 +26,7 @@ After opening an album, **Play album** stops current playback, cancels an active
 
 Album search now requests the documented maximum of 200 results instead of 50; song searches remain at 50. The [documented API](https://performance-partners.apple.com/search-api) provides a limit but no documented search pagination parameter. There is no local title/artist relevance filter: the entered query is sent as `term`, with `media=music`, `entity=album` and the selected storefront. Returned collection records are validated as albums; this is not a guarantee of full subscription-catalog coverage or relevance.
 
-The reported `faye webster Atlanta Millionaires Club` omission is not yet reproduced against a live iTunes search response. Apple's [BR album page](https://music.apple.com/br/album/atlanta-millionaires-club/1452886606) confirms the album and provides its direct URL, which can be pasted into Open URL to request collection lookup independently of search ranking. The larger limit is a bounded improvement, not a proven fix for that specific omission. Synthetic regression fixtures exercise the exact query and URL.
+The reported `faye webster Atlanta Millionaires Club` omission is not yet reproduced against a live iTunes search response. Apple's [BR album page](https://music.apple.com/br/album/atlanta-millionaires-club/1452886606) confirms the album. The user reports that exact artist browsing finds the relevant releases even when album-name search omits them. The larger limit is a bounded improvement, not a proven fix for that specific omission. Synthetic regression fixtures exercise the exact query and URL.
 
 The album layout now follows the agreed text requirements: one cover/title/artist/release-date/track-count header, adjacent Play album and Queue album buttons, and compact text-only rows containing track number, title — album artist, and a right-aligned duration. Changing track selection no longer creates a second album pane. Empty playback/error labels stop consuming vertical space; active media/output/fallback labels remain visible. The single shared badge retains the contextual catalog destination without repeated store text controls.
 
@@ -46,7 +46,7 @@ The exact reported `Atlanta Millionaires Club` → `Season Of The Witch - Single
 
 ## Artist browsing
 
-Choose **Artists** in Search, then **Open artist** (or double-click) to request albums by the returned artist ID and the selected storefront. Artist results show name and available genre, without misleading album artwork. Open an album to use the existing ordered track view, Play album and Queue album. Songs, collections and artists retain separate IDs. BR remains the default storefront and Albums remains the default search mode.
+Choose **Artists** in Search, then **Open artist** (or double-click) to request albums by the returned artist ID and the selected storefront. Artist results show name and available genre, without misleading album artwork. Open an album to use the existing ordered track view, Play album and Queue album. Songs, collections and artists retain separate IDs. BR remains the default storefront; Artists is the default search mode.
 
 The documented music search entity is `musicArtist`; album lookup uses `id=<artistId>&country=<storefront>&entity=album&limit=200`. See [Search parameters](https://performance-partners.apple.com/search-api) and [official Lookup examples](https://developer.apple.com/library/archive/documentation/AudioVideo/Conceptual/iTuneSearchAPI/LookupExamples.html). This is a limited public catalog selection, not a complete Apple Music discography. Existing spacing, bounded retry, cache and latest-request handling apply.
 
@@ -69,3 +69,14 @@ The 200-result probe now records no idle paint/resize/layout/show/hide events fo
 The album header's artist name is a keyboard-accessible internal navigation button. It opens albums using the collection's artist ID and storefront, without affecting playback or queue contents. Missing/invalid IDs leave the name disabled with an explanation. A compilation uses its returned collection artist identity when available; a guest track performer is never substituted for a missing album artist ID. Failed requests retain the displayed album for retry; newer navigation supersedes older responses.
 
 Artist portraits are not implemented. Apple's [Artist attributes](https://developer.apple.com/documentation/applemusicapi/artists/attributes-data.dictionary) explicitly define artist image artwork, but [Apple Music API](https://developer.apple.com/documentation/applemusicapi/) requests require a developer token. Our public [iTunes response documentation](https://developer.apple.com/library/archive/documentation/AudioVideo/Conceptual/iTuneSearchAPI/UnderstandingSearchResults.html) describes optional media artwork, not a guaranteed artist-portrait field. No live public artist response with genuine portrait provenance could be verified in this environment. Artist results therefore stay text-only; no album-cover substitution, guessed image URLs, new credentials or web scraping are introduced. The wrapper session does not supply the separate developer token.
+
+
+## Artist release groups
+
+Artist pages show Albums, EPs, then Others, omitting empty groups. Each group sorts by returned release date newest first, with missing/invalid dates last; equal dates use title, country and collection ID for deterministic ordering. Dates may describe reissues. Headings cannot be selected or queued.
+
+The public lookup's `collectionType=Album` includes LPs, EPs and singles. We therefore use conservative title hints: a final separated `- EP` (case-insensitive) goes to EPs; `- Single` goes to Others. En/em dashes are accepted as separators. Remaining titled collections go to Albums, which is a default bucket, not verified LP classification; missing titles go to Others. No track-count guesses or translated suffix guesses are made. Original titles and identities stay intact.
+
+Artists is now the initial search mode. Direct song/album URL controls are removed; internal canonical playback URLs and parsing remain. The user accepts artist browsing as the practical workaround for public album-search omissions; no extra diagnostic UI was added.
+
+Synthetic grouped artist previews: [normal](artist-groups.png) and [small/high-DPI](artist-groups-small.png).

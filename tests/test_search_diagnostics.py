@@ -91,6 +91,7 @@ def test_search_diagnostic_snapshot_survives_stale_home_album_and_edited_input(
 ):
     window = Window(tmp_path / "cache")
     window.startup_attempted = True
+    window.search_kind.setCurrentIndex(window.search_kind.findData("album"))
     monkeypatch.setattr(window.controller, "tick", lambda: None)
     started, release = threading.Event(), threading.Event()
     wrong_response = [False]

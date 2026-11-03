@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QListWidget,
+    QListWidgetItem,
     QMainWindow,
     QMessageBox,
     QPushButton,
@@ -45,12 +46,13 @@ from .catalog import (
     Catalog,
     CatalogDeferred,
     SearchResults,
+    grouped_releases,
     public_text,
     recent_releases,
 )
 from .controller import Controller
 from .library import History
-from .model import Album, Artist, PlayerError, Track, parse_url
+from .model import Album, Artist, PlayerError, Track
 from .playback import Mpv
 
 GIB = 1024**3
@@ -206,7 +208,7 @@ class Window(QMainWindow):
         self.search_kind.addItem("Songs", "song")
         self.search_kind.addItem("Albums", "album")
         self.search_kind.addItem("Artists", "musicArtist")
-        self.search_kind.setCurrentIndex(1)
+        self.search_kind.setCurrentIndex(2)
         self.search_kind.currentIndexChanged.connect(self.invalidate_search)
         search_row.addWidget(self.search_kind)
         search_row.addWidget(QLabel("Storefront"))
@@ -232,7 +234,7 @@ class Window(QMainWindow):
         self.use_backend_country.clicked.connect(self.adopt_backend_storefront)
         storefront_row.addWidget(self.use_backend_country)
         layout.addLayout(storefront_row)
-        self.catalog_status = QLabel("Search, browse a result's album, or paste a URL below.")
+        self.catalog_status = QLabel("Search for artists, albums or songs.")
         self.catalog_status.setTextFormat(Qt.PlainText)
         self.catalog_status.setWordWrap(True)
         diagnostics_row = QHBoxLayout()
@@ -274,13 +276,6 @@ class Window(QMainWindow):
         self.quality.addItem("Prefer Dolby Atmos", "atmos")
         result_buttons.addWidget(self.quality)
         layout.addLayout(result_buttons)
-        url_row = QHBoxLayout()
-        self.url = QLineEdit()
-        self.url.setPlaceholderText("https://music.apple.com/… song or album URL")
-        self.url.returnPressed.connect(self.add_url)
-        url_row.addWidget(self.url)
-        self.button(url_row, "Open URL", self.add_url)
-        layout.addLayout(url_row)
         queue_page = QWidget()
         self.pages.addTab(queue_page, "Queue")
         layout = QVBoxLayout(queue_page)
@@ -381,7 +376,13 @@ class Window(QMainWindow):
         self.pages.setCurrentIndex(1)
         self.request_catalog(self.catalog.album, album.id, album.country, album_title=album.title)
 
+    def result_index(self, row):
+        item = self.result_list.item(row)
+        index = item.data(Qt.UserRole) if item else None
+        return row if index is None else index
+
     def show_selected_album(self, row):
+        row = self.result_index(row)
         self.badge_context = self.album_header.album
         if self.detail_card:
             self.detail_host.removeWidget(self.detail_card)
@@ -458,22 +459,23 @@ class Window(QMainWindow):
                 self.detail_card.refresh()
             if self.album_header.album:
                 pass  # Album track rows deliberately have no repeated cover artwork.
-            elif badge_ready:
-                for index, item in enumerate(self.results):
+            else:
+                for row_number in range(self.result_list.count()):
+                    index = self.result_index(row_number)
+                    if not 0 <= index < len(self.results):
+                        continue
+                    item = self.results[index]
                     if isinstance(item, Artist):
                         continue
-                    row = self.result_list.item(index)
-                    if row is None or not self.result_list.visualItemRect(row).intersects(
+                    row = self.result_list.item(row_number)
+                    if not badge_ready:
+                        set_artwork_icon(row, QImage())
+                    elif self.result_list.visualItemRect(row).intersects(
                         self.result_list.viewport().rect()
                     ):
-                        continue
-                    image = self.artwork.get(item.artwork_url)
-                    if not image.isNull():
-                        set_artwork_icon(self.result_list.item(index), image)
-            else:
-                for index in range(self.result_list.count()):
-                    if not isinstance(self.results[index], Artist):
-                        set_artwork_icon(self.result_list.item(index), QImage())
+                        image = self.artwork.get(item.artwork_url)
+                        if not image.isNull():
+                            set_artwork_icon(row, image)
         if self.now_card:
             self.now_card.refresh()
 
@@ -718,7 +720,7 @@ class Window(QMainWindow):
         self.storefront_notice.setText(text)
 
     def browse_album(self):
-        row = self.result_list.currentRow()
+        row = self.result_index(self.result_list.currentRow())
         if 0 <= row < len(self.results):
             item = self.results[row]
             if isinstance(item, Artist):
@@ -729,7 +731,7 @@ class Window(QMainWindow):
                 self.open_album(item if isinstance(item, Album) else item.album)
 
     def add_selected(self):
-        row = self.result_list.currentRow()
+        row = self.result_index(self.result_list.currentRow())
         if 0 <= row < len(self.results):
             if isinstance(self.results[row], Artist):
                 self.open_artist(self.results[row])
@@ -750,26 +752,6 @@ class Window(QMainWindow):
         for track in self.results:
             if isinstance(track, Track):
                 self.controller.add(track, self.quality.currentData())
-
-    def add_url(self):
-        try:
-            country, kind, item = parse_url(self.url.text())
-            changed = self.country.text().lower() != country
-            self.country.setText(country)  # Invalidates old results and in-flight requests.
-            self.remember_storefront()
-            if changed:
-                self.catalog_status.setText(
-                    f"Storefront changed to {country.upper()} from URL · search again to browse."
-                )
-            if kind == "album":
-                self.request_catalog(self.catalog.album, item, country, album_title="Album tracks")
-            else:
-                self.controller.add(
-                    Track(country, item, f"Song {item}"), self.quality.currentData()
-                )
-                self.url.clear()
-        except PlayerError as exc:
-            self.controller.error = str(exc)
 
     def remove_selected(self):
         self.controller.remove(self.queue_list.currentRow())
@@ -913,6 +895,20 @@ class Window(QMainWindow):
                                     Qt.AccessibleDescriptionRole, "Duration " + track.duration_label
                                 )
                                 item.setSizeHint(QSize(0, 30))
+                        elif self.pending_result_kind == "artist_albums":
+                            for group, albums_in_group in grouped_releases(self.results):
+                                heading = QListWidgetItem(group)
+                                heading.setFlags(Qt.ItemIsEnabled)
+                                heading.setData(Qt.UserRole, -1)
+                                font = heading.font()
+                                font.setBold(True)
+                                heading.setFont(font)
+                                self.result_list.addItem(heading)
+                                for album in albums_in_group:
+                                    item = QListWidgetItem(album.title)
+                                    item.setData(Qt.UserRole, self.results.index(album))
+                                    set_artwork_icon(item, QImage())
+                                    self.result_list.addItem(item)
                         else:
                             self.result_list.addItems(
                                 [
@@ -929,7 +925,9 @@ class Window(QMainWindow):
                                 if not isinstance(item, Artist):
                                     set_artwork_icon(self.result_list.item(index), QImage())
                         if self.results:
-                            self.result_list.setCurrentRow(0)
+                            self.result_list.setCurrentRow(
+                                1 if self.pending_result_kind == "artist_albums" else 0
+                            )
                         albums = self.pending_result_kind in {"albums", "artist_albums"}
                         artists = self.pending_result_kind == "artists"
                         self.browse_button.setVisible(not artists and not self.album_header.album)
@@ -962,7 +960,7 @@ class Window(QMainWindow):
                             + (
                                 f"double-click to {action}"
                                 if self.results
-                                else "try another query/storefront or paste an Apple Music URL"
+                                else "try another query or storefront"
                             )
                         )
                         if self.pending_result_kind == "artist_albums":
@@ -970,7 +968,7 @@ class Window(QMainWindow):
                                 self.pending_artist_name
                                 + " · "
                                 + self.catalog_status.text()
-                                + " · limited public catalog; may omit albums"
+                                + " · types inferred from title suffixes; catalog may omit releases"
                             )
                         if isinstance(result, SearchResults):
                             self.catalog_status.setText(
@@ -1002,7 +1000,7 @@ class Window(QMainWindow):
                         self.release_context = None
                         self.release_status.setText("Recent releases unavailable; try again later.")
                     self.catalog_status.setText(
-                        "Catalog unavailable. Check network/storefront or paste a song URL."
+                        "Catalog unavailable. Check network/storefront and search again."
                     )
         if self.pending_result_kind == "releases" and self.release_context:
             self.release_status.setText(self.catalog_status.text())

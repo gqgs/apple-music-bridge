@@ -116,7 +116,7 @@ def test_album_ui_open_tracks_queue_and_stale_results(app, tmp_path, monkeypatch
     window.close()
 
 
-def test_br_direct_song_adopts_and_persists_storefront(app, tmp_path, monkeypatch):
+def test_storefront_edit_persists_and_clears_stale_results(app, tmp_path, monkeypatch):
     import json
 
     from conftest import wait_until
@@ -129,16 +129,14 @@ def test_br_direct_song_adopts_and_persists_storefront(app, tmp_path, monkeypatc
     stale = Future()
     stale.set_running_or_notify_cancel()
     window.catalog_future = (window.generation, stale)
-    window.url.setText("https://music.apple.com/br/song/still/593614986?")
-    window.add_url()
+    window.country.setText("br")
+    window.country.editingFinished.emit()
     assert window.country.text() == "br"
     assert window.results == [] and window.result_list.count() == 0
-    assert window.controller.queue[0].track.url == "https://music.apple.com/br/song/593614986"
     assert json.loads(window.settings_path.read_text())["storefront"] == "br"
     stale.set_result([Track("us", "99999", "Stale US result")])
     window.tick()
     assert window.results == []
-    assert "BR" in window.queue_list.item(0).text()
 
     calls = []
 
@@ -168,7 +166,7 @@ def test_br_direct_song_adopts_and_persists_storefront(app, tmp_path, monkeypatc
         "lookup",
         {"id": "12345", "country": "br", "entity": "song", "limit": 200},
     )
-    assert window.results[0].url == window.controller.queue[0].track.url
+    assert window.results[0].url == "https://music.apple.com/br/song/593614986"
     window.close()
 
     reopened = Window(tmp_path / "cache")
@@ -177,9 +175,8 @@ def test_br_direct_song_adopts_and_persists_storefront(app, tmp_path, monkeypatc
         reopened.country.setText("gb")
         reopened.country.editingFinished.emit()
         assert json.loads(reopened.settings_path.read_text())["storefront"] == "gb"
-        reopened.url.setText("https://untrusted.example/br/song/123")
-        reopened.add_url()
-        assert reopened.country.text() == "gb"  # Invalid URLs cannot change settings.
+        assert not hasattr(reopened, "url")
+        assert not hasattr(reopened, "add_url")
     finally:
         reopened.close()
 

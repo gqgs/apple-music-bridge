@@ -98,7 +98,7 @@ def test_artist_album_play_and_diagnostics(app, tmp_path, monkeypatch):
         window.selected_button.click()
         settle()
         assert calls[-1][1]["id"] == "301" and calls[-1][1]["country"] == "br"
-        assert "may omit albums" in window.catalog_status.text()
+        assert "may omit releases" in window.catalog_status.text()
         window.copy_search_button.click()
         report = json.loads(QApplication.clipboard().text())
         assert report["last_completed_search"]["entity"] == "musicArtist"

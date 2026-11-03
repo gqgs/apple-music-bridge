@@ -212,6 +212,7 @@ def test_qt_search_album_history_home_clear_and_stale_navigation(app, tmp_path, 
         assert not window.recent_shelf.cards
         assert "Play" in window.recent_shelf.note.text()
         window.pages.setCurrentIndex(1)
+        window.search_kind.setCurrentIndex(window.search_kind.findData("album"))
         QTest.keyClicks(window.search, "quiet places")
         QTest.keyClick(window.search, Qt.Key_Return)
         wait_until(lambda: (app.processEvents(), window.tick(), bool(window.results))[2])
@@ -560,6 +561,7 @@ def test_album_header_compact_rows_badge_and_search_transition(app, tmp_path, mo
         assert scroll.maximum() > 0
         scroll.setValue(scroll.maximum())
         assert window.pause_button.mapTo(window, window.pause_button.rect().bottomLeft()).y() < 480
+        window.search_kind.setCurrentIndex(window.search_kind.findData("album"))
         window.search.setText("another album")
         window.search_catalog()
         wait_until(lambda: (app.processEvents(), window.tick(), window.catalog_future is None)[2])

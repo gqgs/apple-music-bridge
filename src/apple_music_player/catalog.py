@@ -99,12 +99,10 @@ class Catalog:
                 exc.close()
                 raise CatalogDeferred(delay, rate_limited=True) from None
             exc.close()
-            raise PlayerError(
-                "Catalog request failed. Try again later or paste a song URL."
-            ) from None
+            raise PlayerError("Catalog request failed. Try again later.") from None
         except Exception:
             raise PlayerError(
-                "Catalog unavailable. Check your network/storefront or paste a song URL."
+                "Catalog unavailable. Check your network/storefront and try again."
             ) from None
         if len(self.responses) >= 100:
             self.responses.clear()
@@ -293,3 +291,28 @@ def recent_releases(albums, today=None):
         if today - timedelta(days=90) <= released <= today:
             found[(album.country, album.id)] = album
     return sorted(found.values(), key=lambda a: a.release_date, reverse=True)[:30]
+
+
+def release_group(album):
+    """Title suffix hints only: iTunes collectionType=Album also covers EPs/singles."""
+    title = album.album_title.strip()
+    if re.search(r"\s[-–—]\s*EP$", title, re.IGNORECASE):
+        return "EPs"
+    if not title or re.search(r"\s[-–—]\s*Single$", title, re.IGNORECASE):
+        return "Others"
+    return "Albums"
+
+
+def grouped_releases(albums):
+    def order(album):
+        try:
+            released = date.fromisoformat(album.release_date[:10]).toordinal()
+        except ValueError:
+            released = 0
+        return (-released, album.album_title.casefold(), album.country, album.id)
+
+    return [
+        (group, sorted((a for a in albums if release_group(a) == group), key=order))
+        for group in ("Albums", "EPs", "Others")
+        if any(release_group(a) == group for a in albums)
+    ]

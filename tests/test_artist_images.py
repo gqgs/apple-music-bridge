@@ -627,3 +627,84 @@ def test_search_gallery_portrait_canonical_itunes_and_restart(tmp_path, monkeypa
         response = request(server, "getCoverArt", {"id": restored["coverArt"]})
         assert response[0] == 200 and not QImage.fromData(response[2]).isNull()
         assert len(calls) == 4  # Positive cache survives full server/SQLite restart.
+
+
+def test_album_cover_during_pending_portrait_and_portrait_success_cache_policy(
+    bridge, monkeypatch, tmp_path
+):
+    from PySide6.QtGui import QImage
+    from test_bridge import ALBUM
+    from test_bridge_artwork import raw_cover_response
+
+    server, _ = bridge
+    server.actor.core.artist_images = True
+    server.artist_images = mod.ArtistImages(tmp_path / "portraits")
+    server.actor.call("remember", [ARTIST, ALBUM])
+    entered, release = threading.Event(), threading.Event()
+
+    def resolve(*_):
+        entered.set()
+        assert release.wait(3)
+        return image_bytes("PNG"), credits()
+
+    monkeypatch.setattr(mod, "resolve", resolve)
+    monkeypatch.setattr(server.covers, "get", lambda *args: image_bytes("PNG"))
+    with ThreadPoolExecutor(2) as pool:
+        portrait = pool.submit(raw_cover_response, server, "artist-image:am:br:lossless:artist:1")
+        assert entered.wait(1)
+        try:
+            album = pool.submit(raw_cover_response, server, "am:br:lossless:album:2").result(
+                timeout=1
+            )
+            assert album[0] == 200 and not QImage.fromData(album[2]).isNull()
+            assert album[1].get_all("Cache-Control") == ["private, max-age=86400"]
+        finally:
+            release.set()
+        status, headers, body = portrait.result(timeout=1)
+        assert status == 200 and not QImage.fromData(body).isNull()
+        assert headers.get_all("Cache-Control") == ["private, max-age=86400"]
+
+
+def test_pending_portrait_http_is_503_then_completed_lookup_is_png(bridge, monkeypatch, tmp_path):
+    from types import SimpleNamespace
+
+    from test_bridge_artwork import raw_cover_response
+
+    server, _ = bridge
+    server.actor.core.artist_images = True
+    service = server.artist_images = mod.ArtistImages(tmp_path / "portraits")
+    server.actor.call("remember", [ARTIST])
+    entered, release = threading.Event(), threading.Event()
+
+    def resolve(*_):
+        entered.set()
+        assert release.wait(3)
+        return image_bytes("PNG"), credits()
+
+    monkeypatch.setattr(mod, "resolve", resolve)
+    submit = service.pool.submit
+    jobs = []
+
+    def short_wait(*args, **kwargs):
+        future = submit(*args, **kwargs)
+        jobs.append(future)
+        return SimpleNamespace(
+            result=lambda **kw: future.result(timeout=0.02),
+            add_done_callback=future.add_done_callback,
+        )
+
+    monkeypatch.setattr(service.pool, "submit", short_wait)
+    try:
+        status, headers, body = raw_cover_response(server, "artist-image:am:br:lossless:artist:1")
+        assert entered.is_set() and status == 503
+        assert headers.get_all("Cache-Control") == ["no-store"]
+        assert headers["X-Artwork-Reason"] == "lookup-pending"
+        assert headers.get_content_type() == "application/xml" and not body.startswith(b"\x89PNG")
+        assert service.info(ARTIST)["status"] == "pending"
+    finally:
+        release.set()
+    jobs[0].result(timeout=1)
+    status, headers, body = raw_cover_response(server, "artist-image:am:br:lossless:artist:1")
+    assert status == 200 and body.startswith(b"\x89PNG")
+    assert headers.get_all("Cache-Control") == ["private, max-age=86400"]
+    assert len(jobs) == 1

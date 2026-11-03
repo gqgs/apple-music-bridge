@@ -275,12 +275,17 @@ class Handler(BaseHTTPRequestHandler):
 
     def reply(self, status, body=b"", mime="application/octet-stream", extra=None):
         self.send_response(status)
-        self.send_header("Content-Type", mime)
-        self.send_header("Content-Length", str(len(body)))
-        self.send_header("Cache-Control", "no-store")
-        self.send_header("X-Content-Type-Options", "nosniff")
-        self.send_header("Connection", "close")
-        for key, value in (extra or {}).items():
+        headers = {
+            "Content-Type": mime,
+            "Content-Length": str(len(body)),
+            "Cache-Control": "no-store",
+            "X-Content-Type-Options": "nosniff",
+            "Connection": "close",
+        }
+        # Overrides must replace defaults, not append conflicting duplicate fields.
+        # In particular, Go Header.Get reads the first Cache-Control value.
+        headers.update(extra or {})
+        for key, value in headers.items():
             self.send_header(key, str(value))
         self.end_headers()
         self.close_connection = True

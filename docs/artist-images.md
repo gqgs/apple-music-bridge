@@ -167,3 +167,15 @@ Tests model these URL forms and provider response structure through search,
 getArtists, getCoverArt and full restart, including a pre-existing negative cache.
 They do not prove live coverage for a particular artist, missing relationships in
 other countries, or the identity selected by an anonymous diagnostic probe.
+
+### Album/portrait cache headers
+
+Successful images emit exactly one `Cache-Control: private, max-age=86400` header;
+errors emit exactly one `Cache-Control: no-store`. Previously the default no-store
+header was sent before an additional cacheable header. Go's `Header.Get` reads the
+first value, so a client interpreting no-store as a retry signal fetched even a
+valid cached album cover four times. The bridge now replaces its default header
+instead of appending a conflicting value. Tests reproduce that client decision
+with real HTTP responses and verify album retrieval during a pending portrait.
+Clients should also keep image cache policy separate from retry policy: no-store
+alone does not mean a valid image is transient or should not be displayed.

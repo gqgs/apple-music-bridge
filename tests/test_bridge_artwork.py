@@ -395,3 +395,62 @@ def test_busy_metadata_is_not_a_successful_placeholder(bridge):
     finally:
         connection.rollback()
         connection.close()
+
+
+def raw_cover_response(server, identifier):
+    import http.client
+    from urllib.parse import urlencode
+
+    from test_bridge import KEY
+
+    conn = http.client.HTTPConnection("127.0.0.1", server.server_port, timeout=3)
+    try:
+        query = urlencode(
+            {"apiKey": KEY, "v": "1.16.1", "c": "fixture", "f": "json", "id": identifier}
+        )
+        conn.request("GET", "/rest/getCoverArt?" + query)
+        response = conn.getresponse()
+        return response.status, response.headers, response.read()
+    finally:
+        conn.close()
+
+
+def test_album_success_has_one_cache_policy_and_needs_no_client_retry(bridge, monkeypatch):
+    server, _ = bridge
+    calls = transport(monkeypatch, image_bytes("JPEG"))
+    server.actor.call("remember", [replace(ALBUM, artwork_url=URL)])
+    responses = []
+    # Mirror the current client's first-header no-store retry decision, without sleeps.
+    for _ in range(4):
+        status, headers, body = raw_cover_response(server, "am:br:lossless:album:2")
+        responses.append(status)
+        assert status == 200 and not QImage.fromData(body).isNull()
+        if "no-store" not in headers.get("Cache-Control", ""):
+            break
+    assert responses == [200]
+    assert headers.get_all("Cache-Control") == ["private, max-age=86400"]
+    assert len(calls) == 1
+
+
+@pytest.mark.parametrize("portrait", [False, True])
+def test_cover_failure_has_one_no_store_policy(bridge, monkeypatch, tmp_path, portrait):
+    from apple_music_player.bridge.artist_images import ArtistImages, ResolutionFailure
+
+    server, _ = bridge
+    server.actor.call("remember", [ARTIST, replace(ALBUM, artwork_url=URL)])
+    if portrait:
+        server.actor.core.artist_images = True
+        server.artist_images = ArtistImages(tmp_path / "portraits")
+
+        def fail(*args):
+            raise ResolutionFailure("musicbrainz-network")
+
+        monkeypatch.setattr("apple_music_player.bridge.artist_images.resolve", fail)
+        identifier = "artist-image:am:br:lossless:artist:1"
+    else:
+        transport(monkeypatch, b"invalid image")
+        identifier = "am:br:lossless:album:2"
+    status, headers, body = raw_cover_response(server, identifier)
+    assert status == 503
+    assert headers.get_all("Cache-Control") == ["no-store"]
+    assert headers.get_content_type() == "application/xml" and b"<error " in body

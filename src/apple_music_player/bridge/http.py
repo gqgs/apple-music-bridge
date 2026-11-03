@@ -15,7 +15,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
-from ..model import Artist, PlayerError, Track
+from ..model import PlayerError
 from .artwork import Covers
 from .core import BridgeError, Core
 
@@ -109,44 +109,59 @@ def placeholder():
     )
 
 
+def static_response(method, params):
+    if method in {"ping", "getOpenSubsonicExtensions"}:
+        return {"openSubsonicExtensions": EXTENSIONS} if method != "ping" else {}
+    if method == "getLicense":
+        return {"license": {"valid": True}}
+    if method == "getMusicFolders":
+        return {
+            "musicFolders": {"musicFolder": [{"id": 1, "name": "Apple catalog (discovered items)"}]}
+        }
+    if method == "getUser":
+        if params.get("username", "bridge") != "bridge":
+            raise BridgeError(70, "Unknown user")
+        return {
+            "user": {
+                "username": "bridge",
+                "streamRole": True,
+                "downloadRole": False,
+                "adminRole": False,
+                "settingsRole": False,
+                "scrobblingEnabled": False,
+            }
+        }
+    if method == "tokenInfo":
+        return {"tokenInfo": {"username": "bridge"}}
+    if method == "getPlaylists":
+        return {"playlists": {"playlist": []}}
+    if method == "getGenres":
+        return {"genres": {"genre": []}}
+    if method == "getInternetRadioStations":
+        return {"internetRadioStations": {"internetRadioStation": []}}
+    return None
+
+
 class ProtocolCore(Core):
     def dispatch(self, method, params):
-        if method in {"ping", "getOpenSubsonicExtensions"}:
-            return {"openSubsonicExtensions": EXTENSIONS} if method != "ping" else {}
-        if method == "getLicense":
-            return {"license": {"valid": True}}
-        if method == "getMusicFolders":
-            return {
-                "musicFolders": {
-                    "musicFolder": [{"id": 1, "name": "Apple catalog (discovered items)"}]
-                }
-            }
-        if method == "getUser":
-            if params.get("username", "bridge") != "bridge":
-                raise BridgeError(70, "Unknown user")
-            return {
-                "user": {
-                    "username": "bridge",
-                    "streamRole": True,
-                    "downloadRole": False,
-                    "adminRole": False,
-                    "settingsRole": False,
-                    "scrobblingEnabled": False,
-                }
-            }
-        if method == "tokenInfo":
-            return {"tokenInfo": {"username": "bridge"}}
+        ready = static_response(method, params)
+        if ready is not None:
+            return ready
         if method == "search3":
-            result = {}
-            for kind in ("artist", "album", "song"):
-                values = self.search(
-                    params.get("query", ""),
-                    kind,
-                    number(params, kind + "Count", 20),
-                    number(params, kind + "Offset", 0),
-                )
-                result[kind] = [self.describe(value) for value in values]
-            return {"searchResult3": result}
+            ranges = {
+                kind: (number(params, kind + "Count", 20), number(params, kind + "Offset", 0))
+                for kind in ("artist", "album", "song")
+            }
+            values = {
+                kind: self.search(params.get("query", "").strip(), kind, count, offset)
+                for kind, (count, offset) in ranges.items()
+            }
+            return {
+                "searchResult3": {
+                    kind: [self.describe(value) for value in items]
+                    for kind, items in values.items()
+                }
+            }
         if method == "getArtists":
             artists = sorted(self.known("artist"), key=lambda item: item.title.casefold())
             return {
@@ -201,21 +216,7 @@ class ProtocolCore(Core):
                 "albumList2": {"album": [self.describe(a) for a in albums[offset : offset + count]]}
             }
         if method == "getCoverArt":
-            item = self.resolve(params.get("id", ""))
-            if isinstance(item, Artist):
-                return ""  # Public artist metadata has no verified portrait URL.
-            if isinstance(item, Track) and not item.artwork_url and item.album_id:
-                try:
-                    item = self.resolve(
-                        f"am:{item.country}:{self.quality}:album:{item.album_id}", "album"
-                    )
-                except BridgeError as exc:
-                    if exc.code != 70:
-                        raise
-                    return ""
-            return item.artwork_url
-        if method == "getPlaylists":
-            return {"playlists": {"playlist": []}}
+            return self.cached_artwork(params.get("id", ""))
         raise BridgeError(0, "Endpoint not implemented by this read-only proof of concept")
 
 
@@ -397,11 +398,16 @@ class Handler(BaseHTTPRequestHandler):
             if method == "stream":
                 self.stream(params)
                 return
-            payload = (
-                {"openSubsonicExtensions": EXTENSIONS}
-                if method == "getOpenSubsonicExtensions"
-                else self.server.actor.call("dispatch", method, params)
-            )
+            payload = static_response(method, params)
+            if method == "getCoverArt":
+                payload = self.server.actor.core.cached_artwork(params.get("id", ""))
+            elif payload is None:
+                if not self.server.metadata_slots.acquire(blocking=False):
+                    raise BridgeError(0, "Catalog busy; retry later")
+                try:
+                    payload = self.server.actor.metadata(method, params)
+                finally:
+                    self.server.metadata_slots.release()
             if method == "getCoverArt":
                 image = self.server.covers.get(payload, number(params, "size", 400, 4096))
                 self.reply(
@@ -459,7 +465,8 @@ class Server(ThreadingHTTPServer):
 
     def __init__(self, actor, credentials, port=4533, quality="lossless"):
         self.actor, self.credentials, self.quality = actor, credentials, quality
-        self.slots = threading.BoundedSemaphore(8)
+        self.slots = threading.BoundedSemaphore(16)
+        self.metadata_slots = threading.BoundedSemaphore(4)
         self.covers = Covers(actor.core.cache.root / "artwork")
         try:
             super().__init__(("127.0.0.1", port), Handler)
@@ -474,7 +481,16 @@ class Server(ThreadingHTTPServer):
 
     def process_request(self, request, client_address):
         if not self.slots.acquire(blocking=False):
-            request.close()
+            try:
+                request.settimeout(0.1)
+                request.sendall(
+                    b"HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\n"
+                    b"Retry-After: 1\r\nConnection: close\r\n\r\n"
+                )
+            except OSError:
+                pass
+            finally:
+                request.close()
             return
         try:
             super().process_request(request, client_address)

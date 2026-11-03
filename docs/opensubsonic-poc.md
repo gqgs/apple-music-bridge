@@ -68,7 +68,8 @@ form POST. Standard `c` and `v` parameters are required. Supported methods:
 - `ping`, `getLicense`, `getMusicFolders`, `getUser`, `tokenInfo`;
 - `getOpenSubsonicExtensions` (static public discovery only);
 - `search3`, `getArtists`, `getArtist`, `getArtistInfo2`, `getAlbum`, `getSong`;
-- `getAlbumList2` (`alphabeticalByName` and `newest`), empty read-only `getPlaylists`;
+- `getAlbumList2` (`alphabeticalByName` and `newest`);
+- empty read-only `getPlaylists`, `getGenres`, `getInternetRadioStations`;
 - `getCoverArt` validated artwork or fallback PNG and `stream` original completed-file bytes.
 
 Use **search first**: empty queries, `getArtists` and album lists show only locally
@@ -88,8 +89,10 @@ independently of media eviction, capped at 5,000 records. Typed IDs distinguish
 artist/album/song and include country/profile; evicted metadata can be resolved by
 numeric ID again. No title-based remapping across storefronts.
 
-One core worker owns SQLite, catalog requests and downloads. At most eight HTTP
-workers/connections are active; excess connections are closed. This serializes cold
+One core worker owns SQLite writes, catalog requests and downloads. At most 16 HTTP
+workers/connections are active; excess connections receive HTTP 503 with Retry-After.
+At most four metadata requests are admitted concurrently; excess metadata work
+receives a sanitized protocol busy error instead of joining an unbounded queue. This serializes cold
 misses, deduplicates successful identical downloads, bounds queue growth and permits
 concurrent warm streams. Slow downloads also delay metadata work: an explicit PoC
 tradeoff. Full files download/probe/commit before response headers. Downloader timeout
@@ -109,10 +112,13 @@ completion and depend on client/container behavior.
 ## Artwork fetching and format
 
 Album and song covers use the public catalog artwork URL as their source and fallback.
-Songs without their own URL resolve their album; artists without a verified
+Songs without their own URL use their locally known album; artists without a verified
 portrait return the neutral placeholder (an album cover is not a portrait).
 Only HTTPS `isN-ssl.mzstatic.com` URLs on port 443 are accepted, including redirects.
 No URL, HTTP body or upstream diagnostic is printed. Authentication remains required.
+Cover metadata uses short-lived read-only SQLite connections (100ms busy timeout),
+not the catalog queue. Unknown or evicted metadata returns a placeholder without
+an additional Apple lookup; opening/searching the item restores its metadata.
 
 Two dedicated workers fetch covers outside the serialized catalog/media worker.
 Duplicate in-flight URLs (including size variants) share work; at most four HTTP callers wait for artwork,
@@ -185,7 +191,9 @@ proxy support or unauthenticated stream/cover routes. Strict Host validation and
 rejection of browser Origin headers reduce browser/DNS-rebinding exposure; browser
 clients requiring CORS are intentionally unsupported. Credentials must be an owned,
 private regular file with no symlink path components. Authentication applies to
-all data routes. Only static extension discovery is public. Mixed/duplicate auth
+all data routes. Only static extension discovery is public. Lightweight authenticated endpoints
+(ping, library/user/license information and empty playlist/genre/radio lists)
+bypass the catalog worker, so they remain responsive during catalog waits. Mixed/duplicate auth
 parameters fail. Errors are fixed/sanitized and cannot contain downloader output,
 HTTP bodies, credentials or account state. Never publish these local URLs with keys.
 
@@ -260,3 +268,41 @@ server/album data.
 
 Artwork fetching now replaces the initial placeholder-only implementation; see the
 format, safety and terms limitations above.
+
+
+## Search latency and overload investigation
+
+Source-reviewed Supersonic `f28980f8` SearchAll sends `search3` (16 results per
+category) alongside playlist, genre and radio requests. The latter now return
+immediately, independently of catalog work. This PoC has no genre/radio indexes;
+empty lists do not describe the entire Apple catalog. Its Albums iterator expands
+artist matches through getArtist and song matches through getAlbum before yielding
+its results. That can produce many additional rate-limited catalog requests.
+
+A synthetic clock/HTTP fixture reproduces cold search start times at 0, 3 and 6
+seconds for artists/albums/songs. Identical cached searches avoid those upstream
+calls. This is a scheduling model, not measured live Apple latency. Album expansion
+adds more requests; network time is additional. No parallel upstream requests,
+rate-limit bypass, hidden result-type omission or inferred query cancellation is used.
+
+Each admitted HTTP metadata operation now has a 20-second deadline including its
+queue wait. Expired queued tasks skip dispatch and retain their admission slots until drained
+(to bound the executor queue even during a blocked download); running work checks the deadline
+before/after upstream calls and before cooldown sleeps, so it does not proceed to
+remaining categories after expiry. An in-flight urllib request cannot be forcibly
+interrupted and finishes subject to its existing network timeout. Client disconnects
+and changed queries are not uniquely identified: no global latest-query rule is
+applied across clients/tabs. Cold media downloads retain their separate existing
+longer timeout, and can still delay catalog operations on the shared core worker.
+
+Search numeric parameters are validated together before any upstream request, and
+result child counts are computed once per metadata revision instead of repeatedly
+scanning the complete local catalog for every result. Counts remain locally known
+children, not a claim of full Apple discography size.
+
+Tests reproduce parallel Supersonic auxiliary traffic during a blocked search,
+responsive cached covers, explicit admission failures, queued/running expiry,
+rate-spacing preservation, cached pagination and count invalidation. Real Supersonic
+blank-screen recovery and live search behavior still require retesting. If slow
+search persists, distinguish Search Everywhere from filtering the Albums/Artists
+pages; those client flows have materially different request fan-out.

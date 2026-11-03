@@ -179,3 +179,36 @@ instead of appending a conflicting value. Tests reproduce that client decision
 with real HTTP responses and verify album retrieval during a pending portrait.
 Clients should also keep image cache policy separate from retry policy: no-store
 alone does not mean a valid image is transient or should not be displayed.
+
+### One-command image diagnostic
+
+Close Supersonic and allow about 30 seconds for queued image work to settle.
+From the checkout and Python environment used by the running bridge, run:
+
+```sh
+python scripts/bridge_image_probe.py --auth-file /same/auth-file.json --check-identity
+```
+
+Add the same `--port` and `--cache` options as your bridge if they differ from the
+defaults. The script loads authentication locally and sends it only in POST bodies
+to `127.0.0.1`; it does not print credentials, request URLs, artist/album names, IDs,
+paths, provider bodies or exception messages. It probes one cached album and one
+advertised portrait (preferring the reported A. G. Cook page if present), reporting
+HTTP status, decoded dimensions, MIME category, placeholder detection, cache-header
+count and sanitized outcome codes. The first cached album may differ from the
+currently displayed album; a success narrows the issue but does not prove all
+catalog artwork works.
+
+Only with `--check-identity`, after a confirmed `identity-missing` result, it reads
+that artist's public metadata from the local SQLite cache and makes one fresh public
+MusicBrainz multi-URL lookup. This bypasses only the old negative result in the
+application cache, not any network restriction. No credential is sent to MusicBrainz.
+It reports response shape, URL counts, matching URL counts and artist relationship
+counts, without identifiers or raw payloads. Keep the client idle to avoid concurrent
+provider traffic from another process; there is no retry loop. A provider denial
+remains an error. The lookup does not rewrite the bridge's negative cache.
+
+Synthetic tests cover the real bridge HTTP path, successful/missing images, auth
+errors and list/single/empty provider response shapes. This diagnostic is intended
+to obtain the missing live evidence, not claim that a live provider or client UI has
+already been verified.

@@ -37,6 +37,7 @@ from .browsing import (
     AlbumHeader,
     Shelf,
     TrackRowDelegate,
+    release_heading,
     set_artwork_icon,
     store_link,
 )
@@ -920,9 +921,16 @@ class Window(QMainWindow):
                                 font = heading.font()
                                 font.setBold(True)
                                 heading.setFont(font)
+                                heading.setSizeHint(QSize(0, 48))
                                 self.result_list.addItem(heading)
+                                self.result_list.setItemWidget(
+                                    heading, release_heading(group, self.result_list)
+                                )
                                 for album in albums_in_group:
-                                    item = QListWidgetItem(album.title)
+                                    item = QListWidgetItem(
+                                        album.release_title
+                                        + (" — " + album.artist if album.artist else "")
+                                    )
                                     self.result_indices[self.result_list.count()] = (
                                         self.results.index(album)
                                     )
@@ -931,7 +939,12 @@ class Window(QMainWindow):
                         else:
                             self.result_list.addItems(
                                 [
-                                    item.title
+                                    (
+                                        item.release_title
+                                        + (" — " + item.artist if item.artist else "")
+                                        if isinstance(item, Album)
+                                        else item.title
+                                    )
                                     + (
                                         " · " + item.genre
                                         if isinstance(item, Artist) and item.genre
@@ -987,7 +1000,7 @@ class Window(QMainWindow):
                                 self.pending_artist_name
                                 + " · "
                                 + self.catalog_status.text()
-                                + " · types inferred from title suffixes; catalog may omit releases"
+                                + " · Title-based groups; unmarked releases are in Others"
                             )
                         if isinstance(result, SearchResults):
                             self.catalog_status.setText(

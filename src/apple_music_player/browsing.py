@@ -127,7 +127,7 @@ class AlbumCard(QFrame):
         self.cover.installEventFilter(self)
         self.cover.clicked.connect(lambda: opened(album))
         layout.addWidget(self.cover)
-        self.title = QLabel(album.album_title or album.title)
+        self.title = QLabel(album.release_title)
         self.title.setTextFormat(Qt.PlainText)
         self.title.setWordWrap(True)
         self.title.setStyleSheet("font-weight: 600")
@@ -275,3 +275,24 @@ class Shelf(QWidget):
     def refresh(self):
         for card in self.cards:
             card.refresh()
+
+
+def release_heading(title, parent):
+    """A high-contrast, spaced section label with a separator, never a release."""
+    widget = QWidget(parent)
+    widget.setAutoFillBackground(True)
+    widget.setBackgroundRole(QPalette.Base)
+    layout = QVBoxLayout(widget)
+    layout.setContentsMargins(4, 12, 4, 6)
+    layout.setSpacing(4)
+    label = QLabel(title)
+    label.setTextFormat(Qt.PlainText)
+    font = label.font()
+    font.setBold(True)
+    label.setFont(font)
+    layout.addWidget(label)
+    line = QFrame()
+    line.setFrameShape(QFrame.HLine)
+    layout.addWidget(line)
+    widget.setAccessibleName(title + " releases")
+    return widget

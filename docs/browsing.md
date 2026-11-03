@@ -73,10 +73,19 @@ Artist portraits are not implemented. Apple's [Artist attributes](https://develo
 
 ## Artist release groups
 
-Artist pages show Albums, EPs, then Others, omitting empty groups. Each group sorts by returned release date newest first, with missing/invalid dates last; equal dates use title, country and collection ID for deterministic ordering. Dates may describe reissues. Headings cannot be selected or queued.
+Artist pages show Albums, Singles & EPs, Live Albums, Compilations, then Others, omitting empty groups. Spaced, bold headings with separator lines cannot be selected or queued. Each group sorts newest returned release date first; missing/invalid dates are last, with title/country/ID ties deterministic. Release rows and cards append a year only from a valid returned date. Original titles are unchanged; the album-detail header keeps its existing release-date line instead of repeating a year. Dates may describe reissues rather than original publication.
 
-The public lookup's `collectionType=Album` includes LPs, EPs and singles. We therefore use conservative title hints: a final separated `- EP` (case-insensitive) goes to EPs; `- Single` goes to Others. En/em dashes are accepted as separators. Remaining titled collections go to Albums, which is a default bucket, not verified LP classification; missing titles go to Others. No track-count guesses or translated suffix guesses are made. Original titles and identities stay intact.
+The public iTunes [result documentation](https://developer.apple.com/library/archive/documentation/AudioVideo/Conceptual/iTuneSearchAPI/UnderstandingSearchResults.html) does not define editorial album/EP/live/compilation flags. Its collection type Album is not evidence of a major studio LP. The separate [Apple Music album attributes](https://developer.apple.com/documentation/applemusicapi/albums/attributes-data.dictionary) describe compilation information, but those are not fields we can assume in the public iTunes response. Live public iTunes payload verification remains unavailable in this environment; no denied route was retried.
 
-Artists is now the initial search mode. Direct song/album URL controls are removed; internal canonical playback URLs and parsing remain. The user accepts artist browsing as the practical workaround for public album-search omissions; no extra diagnostic UI was added.
+Our mutually exclusive groups are title heuristics, in this priority:
+- Singles & EPs: final separated EP/Single markers, including parenthesized labels such as UK CD1 Single. Supported Spanish single markers include Sencillo/Sencilla and their plurals.
+- Compilations: explicit Greatest Hits, Compilation, Compilación, Compilações or Coletânea phrases; exact Anthology/Antologia/Antología or Best Of titles; or Best Of followed by the actual artist name.
+- Live Albums: explicit parenthesized/bracketed or dash-separated Live/Ao Vivo/En Vivo markers, or Live at/in/from prefixes. Bare words such as Live Forever, I Live or Cornucopia Live are ambiguous and stay in Others.
+- Albums: explicit final Album/Álbum/Studio Album/LP markers only.
+- Others: every unmarked or unknown release. In particular, an ordinary studio-album title can appear here: we cannot safely distinguish it from an unmarked single or compilation.
+
+No track-count thresholds, guessed editorial fields, artist-specific hardcoded catalogs or translated-label guesses beyond the listed markers are used. [Apple's public Björk page](https://music.apple.com/us/artist/bj%C3%B6rk/295015?uo=4) supplies source names for tests (Human Behaviour (UK Remixes) - EP, Big Time Sensuality (UK CD1 Single), Vulnicura (Live), Björk's Greatest Hits, Fossora, Bastards). It also shows overlapping editorial categories. Our fixtures test the stated heuristic, not equality with Apple's taxonomy; Bastards and Fossora remain unknown without title hints.
+
+Artists is the initial search mode. Direct song/album URL controls are removed; internal canonical playback URLs and parsing remain. The user accepts artist browsing as the practical workaround for public album-search omissions; no extra diagnostic UI was added.
 
 Synthetic grouped artist previews: [normal](artist-groups.png) and [small/high-DPI](artist-groups-small.png).

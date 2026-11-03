@@ -29,16 +29,15 @@ def test_release_classification_dates_and_deterministic_ties():
     ]
     groups = grouped_releases(releases)
     assert [(name, [a.id for a in values]) for name, values in groups] == [
-        ("Albums", ["2", "8", "9", "1", "10", "3"]),
-        ("EPs", ["5", "4"]),
-        ("Others", ["6", "7"]),
+        ("Singles & EPs", ["6", "5", "4"]),
+        ("Others", ["2", "8", "9", "1", "7", "10", "3"]),
     ]
     assert grouped_releases(list(reversed(releases))) == groups
-    assert release_group(album("11", "EP Stories")) == "Albums"
-    assert release_group(album("12", "Série - EP")) == "EPs"
-    assert release_group(album("13", "Édition - Single")) == "Others"
+    assert release_group(album("11", "EP Stories")) == "Others"
+    assert release_group(album("12", "Série - EP")) == "Singles & EPs"
+    assert release_group(album("13", "Édition - Single")) == "Singles & EPs"
     # No unverified localization / track-count heuristics.
-    assert release_group(album("14", "Title - Sencillo")) == "Albums"
+    assert release_group(album("14", "Title - Sencillo")) == "Singles & EPs"
     assert grouped_releases([]) == []
 
 
@@ -49,7 +48,7 @@ def test_grouped_artist_navigation_headers_and_play(app, tmp_path, monkeypatch):
     releases = [
         album("101", "First - Single", "2026-01-01"),
         album("102", "Second - EP", "2025-01-01"),
-        album("103", "Third album", "2024-01-01"),
+        album("103", "Third album (Studio Album)", "2024-01-01"),
     ]
     monkeypatch.setattr(window.catalog, "artist_albums", lambda *a: releases)
     songs = window.catalog.tracks(
@@ -77,21 +76,25 @@ def test_grouped_artist_navigation_headers_and_play(app, tmp_path, monkeypatch):
         window.show()
         window.open_artist(Artist("br", "301", "Fixture"))
         settle()
-        assert [window.result_list.item(i).text() for i in range(6)] == [
+        assert [window.result_list.item(i).text() for i in range(5)] == [
             "Albums",
-            "Third album — Fixture",
-            "EPs",
-            "Second - EP — Fixture",
-            "Others",
-            "First - Single — Fixture",
+            "Third album (Studio Album) (2024) — Fixture",
+            "Singles & EPs",
+            "First - Single (2026) — Fixture",
+            "Second - EP (2025) — Fixture",
         ]
-        for i in (0, 2, 4):
-            assert not window.result_list.item(i).flags() & Qt.ItemIsSelectable
+        for i in (0, 2):
+            heading = window.result_list.item(i)
+            assert not heading.flags() & Qt.ItemIsSelectable
+            assert heading.sizeHint().height() >= 48
+            header = window.result_list.itemWidget(heading)
+            assert header.accessibleName().endswith("releases")
+            assert header.autoFillBackground()
             window.result_list.setCurrentRow(i)
             window.add_selected()
             window.browse_album()
             assert not calls and not window.controller.queue
-        window.result_list.setCurrentRow(3)
+        window.result_list.setCurrentRow(4)
         QTest.mouseClick(window.selected_button, Qt.LeftButton)
         settle()
         assert calls == [("102", "br")]
@@ -146,3 +149,60 @@ def test_many_grouped_releases_keep_viewport_loading_stable(app, tmp_path, monke
         assert window.result_list.currentRow() == 150
     finally:
         window.close()
+
+
+def test_bjork_title_hints_and_ambiguous_names():
+    # Names verified on Apple's public Björk artist page; these expectations test
+    # our documented heuristic, not a claim of matching Apple's editorial categories.
+    expected = {
+        "Human Behaviour (UK Remixes) - EP": "Singles & EPs",
+        "Big Time Sensuality (UK CD1 Single)": "Singles & EPs",
+        "Vulnicura (Live)": "Live Albums",
+        "Björk's Greatest Hits": "Compilations",
+        "Fossora": "Others",
+        "Bastards": "Others",  # No title hint; do not silently infer a compilation.
+        "Cornucopia Live": "Others",  # Bare word 'Live' is ambiguous without a marker.
+    }
+    for title, group in expected.items():
+        assert release_group(album("1", title)) == group
+    for title in (
+        "Olive",
+        "Live Forever",
+        "I Live",
+        "The Best of Me",
+        "Single Minded",
+        "EP Stories",
+    ):
+        assert release_group(album("1", title)) == "Others"
+    for title in ("Show (Ao Vivo)", "Show - En Vivo", "Live at the Hall"):
+        assert release_group(album("1", title)) == "Live Albums"
+    assert release_group(album("1", "Show (Live) - Single")) == "Singles & EPs"
+    assert release_group(album("1", "Greatest Hits (Live)")) == "Compilations"
+    assert release_group(album("1", "Coletânea")) == "Compilations"
+    assert release_group(album("1", "Record (Studio Album)")) == "Albums"
+    groups = grouped_releases(
+        [
+            album("1", "Other"),
+            album("2", "Coletânea"),
+            album("3", "Show (Live)"),
+            album("4", "Short - EP"),
+            album("5", "Record (Studio Album)"),
+        ]
+    )
+    assert [group for group, _ in groups] == [
+        "Albums",
+        "Singles & EPs",
+        "Live Albums",
+        "Compilations",
+        "Others",
+    ]
+
+
+def test_release_year_uses_only_valid_returned_date():
+    assert album("1", "Record", "1997-09-22T00:00:00Z").release_title == "Record (1997)"
+    for invalid in ("", "unknown", "2024", "2024-02-30"):
+        release = album("1", "Record", invalid)
+        assert release.release_year == ""
+        assert release.release_title == "Record"
+    original = album("1", "Record", "1997-09-22")
+    assert original.album_title == "Record" and original.title == "Record — Fixture"

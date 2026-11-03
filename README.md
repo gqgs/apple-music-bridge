@@ -42,3 +42,8 @@ For a failed download, see [safe diagnostic categories](docs/download-diagnostic
 The original [SVG logo](src/apple_music_player/assets/logo.svg) is bundled as the Qt application/window icon; it scales without additional dependencies. This project is not affiliated with Apple.
 
 Home defaults to local recently played albums, with recent releases from artists played. See [browsing scope, artwork conditions and history storage](docs/browsing.md). Legacy external-backend settings now lead to managed setup; no old installations, downloads or sessions are deleted. Existing managed sessions continue unchanged. The pinned amdl engine remains an external dependency.
+
+
+Artist cards use release covers by default, reusing cached album artwork with
+bounded background lookups. See [selection and coverage limits](docs/artist-artwork.md).
+Remove the retired `--artist-images` option from older launch commands.

@@ -2,6 +2,7 @@
 
 import json
 import re
+import threading
 import time
 from datetime import date, timedelta
 from email.utils import parsedate_to_datetime
@@ -58,23 +59,46 @@ def public_result(row):
     }
 
 
-class Catalog:
+class CatalogLimiter:
     def __init__(self):
+        self.lock = threading.Lock()
         self.last_request = 0.0
+        self.not_before = 0.0
+
+
+class Catalog:
+    def __init__(self, limiter=None):
+        self.limiter = limiter or CatalogLimiter()
         self.responses = {}
         self.response_times = {}
-        self.not_before = 0.0
         self.last_response_source = None
+
+    @property
+    def last_request(self):
+        return self.limiter.last_request
+
+    @last_request.setter
+    def last_request(self, value):
+        self.limiter.last_request = value
+
+    @property
+    def not_before(self):
+        return self.limiter.not_before
+
+    @not_before.setter
+    def not_before(self, value):
+        self.limiter.not_before = value
 
     def request(self, endpoint, **params):
         key = endpoint + "?" + urlencode(params)
         if key in self.responses and time.monotonic() - self.response_times.get(key, 0) < 3600:
             self.last_response_source = (key, "memory cache")
             return self.responses[key]
-        delay = max(self.last_request + 3, self.not_before) - time.monotonic()
-        if delay > 0:
-            raise CatalogDeferred(delay)
-        self.last_request = time.monotonic()
+        with self.limiter.lock:
+            delay = max(self.last_request + 3, self.not_before) - time.monotonic()
+            if delay > 0:
+                raise CatalogDeferred(delay)
+            self.last_request = time.monotonic()
         try:
             with urlopen("https://itunes.apple.com/" + key, timeout=15) as response:
                 payload = response.read(2_000_001)
@@ -96,7 +120,8 @@ class Catalog:
                 except (ValueError, TypeError, OverflowError):
                     pass
                 delay = max(3.0, delay)
-                self.not_before = time.monotonic() + delay
+                with self.limiter.lock:
+                    self.not_before = max(self.not_before, time.monotonic() + delay)
                 exc.close()
                 raise CatalogDeferred(delay, rate_limited=True) from None
             exc.close()
@@ -188,6 +213,7 @@ class Catalog:
                 str(row["artistId"]),
                 public_text(row["artistName"]),
                 public_text(row.get("primaryGenreName", "")),
+                public_text(row.get("artistLinkUrl") or row.get("artistViewUrl") or "", 2048),
             )
             for row in rows
             if isinstance(row, dict)
@@ -206,18 +232,22 @@ class Catalog:
         diagnostics["artist_id"] = artist_id
         return ArtistAlbums(albums, diagnostics)
 
-    def search(self, query, country, entity="song"):
+    def search(self, query, country, entity="song", *, limit=None):
         if not re.fullmatch("[a-z]{2}", country):
             raise PlayerError("Storefront must be a two-letter country code, e.g. us.")
         if entity not in {"song", "album", "musicArtist"}:
             raise PlayerError("Choose Songs, Albums or Artists.")
+        if limit is None:
+            limit = 200 if entity == "album" else 50
+        if type(limit) is not int or not 1 <= limit <= 200:
+            raise PlayerError("Catalog search limit must be between 1 and 200.")
         parse = {"album": self.albums, "song": self.tracks, "musicArtist": self.artists}[entity]
         params = dict(
             term=query[:200],
             country=country,
             media="music",
             entity=entity,
-            limit=200 if entity == "album" else 50,
+            limit=limit,
         )
         rows = self.request("search", **params)
         accepted = parse(rows, country)

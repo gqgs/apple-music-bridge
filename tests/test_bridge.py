@@ -23,7 +23,7 @@ KEY = "test-bridge-secret-" + "x" * 32
 
 
 class FakeCatalog(Catalog):
-    def search(self, query, country, entity="song"):
+    def search(self, query, country, entity="song", *, limit=None):
         assert country == "br"
         return {"musicArtist": [ARTIST], "album": [ALBUM], "song": [TRACK]}[entity]
 
@@ -86,7 +86,20 @@ def request(server, endpoint, params=None, method="GET", headers=None, auth=True
 
 
 def payload(server, endpoint, params=None, **kwargs):
-    return json.loads(request(server, endpoint, params, **kwargs)[2])["subsonic-response"]
+    status, headers, body = request(server, endpoint, params, **kwargs)
+    if headers["Content-Type"].startswith("application/xml"):
+        import xml.etree.ElementTree as ET
+
+        root = ET.fromstring(body)
+        result = dict(root.attrib)
+        error = root.find("{http://subsonic.org/restapi}error")
+        if error is not None:
+            result["error"] = {
+                "code": int(error.attrib["code"]),
+                "message": error.attrib["message"],
+            }
+        return result
+    return json.loads(body)["subsonic-response"]
 
 
 def test_auth_all_sensitive_routes_and_secret_free_errors(bridge, capsys):
@@ -358,3 +371,28 @@ def test_unknown_release_dates_are_not_invented(bridge, released):
         assert "year" not in result and "releaseDate" not in result
     song = server.actor.call("describe", replace(TRACK, release_date="2001-01-02T00:00:00Z"))
     assert song["year"] == 2001
+
+
+@pytest.mark.parametrize(
+    "method,params,key,value",
+    [
+        ("getLyrics", {"artist": "Fixture", "title": "Song"}, "lyrics", {}),
+        (
+            "getLyricsBySongId",
+            {"id": "am:br:lossless:song:3"},
+            "lyricsList",
+            {"structuredLyrics": []},
+        ),
+    ],
+)
+def test_absent_lyrics_are_empty_without_catalog_work(bridge, method, params, key, value):
+    server, _ = bridge
+    result = payload(server, method, params)
+    assert result["status"] == "ok" and result[key] == value
+    assert not any(m["stage"] == "metadata" for m in server.metrics.snapshot())
+    assert payload(server, method, params, auth=False)["error"]["code"] == 40
+    status, _, body = request(server, method, dict(params, f="xml"))
+    assert (
+        status == 200
+        and ET.fromstring(body).find("{http://subsonic.org/restapi}" + key) is not None
+    )

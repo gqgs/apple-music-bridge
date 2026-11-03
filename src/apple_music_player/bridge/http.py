@@ -18,6 +18,7 @@ from urllib.parse import parse_qs, urlsplit
 from ..model import PlayerError
 from .artwork import Covers, CoverUnavailable
 from .core import BridgeError, Core
+from .release_artwork import ReleaseArtwork, safe_reason
 
 EXTENSIONS = [
     {"name": "apiKeyAuthentication", "versions": [1]},
@@ -133,6 +134,10 @@ def static_response(method, params):
         }
     if method == "tokenInfo":
         return {"tokenInfo": {"username": "bridge"}}
+    if method == "getLyrics":
+        return {"lyrics": {}}
+    if method == "getLyricsBySongId":
+        return {"lyricsList": {"structuredLyrics": []}}
     if method == "getPlaylists":
         return {"playlists": {"playlist": []}}
     if method == "getGenres":
@@ -273,12 +278,17 @@ class Handler(BaseHTTPRequestHandler):
 
     def reply(self, status, body=b"", mime="application/octet-stream", extra=None):
         self.send_response(status)
-        self.send_header("Content-Type", mime)
-        self.send_header("Content-Length", str(len(body)))
-        self.send_header("Cache-Control", "no-store")
-        self.send_header("X-Content-Type-Options", "nosniff")
-        self.send_header("Connection", "close")
-        for key, value in (extra or {}).items():
+        headers = {
+            "Content-Type": mime,
+            "Content-Length": str(len(body)),
+            "Cache-Control": "no-store",
+            "X-Content-Type-Options": "nosniff",
+            "Connection": "close",
+        }
+        # Overrides must replace defaults, not append conflicting duplicate fields.
+        # In particular, Go Header.Get reads the first Cache-Control value.
+        headers.update(extra or {})
+        for key, value in headers.items():
             self.send_header(key, str(value))
         self.end_headers()
         self.close_connection = True
@@ -353,6 +363,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def handle_api(self):
         fmt = "xml"
+        method = ""
         try:
             if (
                 len(self.path) > 8192
@@ -366,6 +377,7 @@ class Handler(BaseHTTPRequestHandler):
             if parsed.scheme or parsed.netloc or not match:
                 self.reply(404)
                 return
+            method = match[1]
             data = parsed.query
             if self.command == "POST":
                 if (
@@ -387,7 +399,8 @@ class Handler(BaseHTTPRequestHandler):
             fmt = params.get("f", "xml")
             if fmt not in {"xml", "json"}:
                 raise BridgeError(10, "Only XML and JSON are supported")
-            method = match[1]
+            if method == "getCoverArt":
+                fmt = "xml"
             # Static extension discovery is the sole public endpoint; no catalog data.
             if method != "getOpenSubsonicExtensions":
                 authenticate(params, self.server.credentials)
@@ -403,9 +416,36 @@ class Handler(BaseHTTPRequestHandler):
                     {"bridgeDiagnostics": {"metric": self.server.metrics.snapshot()}}, fmt
                 )
                 return
+            if method == "getLyricsBySongId":
+                self.server.actor.core.parse(params.get("id", ""), "song")
+            if method == "getArtistArtworkInfo":
+                self.api_response(
+                    {"artistArtworkInfo": self.server.release_art.info(params.get("id", ""))}, fmt
+                )
+                return
+            if method == "getCoverArt" and params.get("id", "").startswith("artist-release:"):
+                identifier = params["id"].removeprefix("artist-release:")
+                album = self.server.release_art.get(identifier)
+                image = self.server.covers.get(
+                    album.artwork_url, number(params, "size", 400, 1024), background=True
+                )
+                self.reply(
+                    200,
+                    image,
+                    "image/png",
+                    {
+                        "X-Artwork-Status": "available",
+                        "X-Artwork-Kind": "release-artwork",
+                        "Cache-Control": "private, max-age=3600",
+                    },
+                )
+                return
             payload = static_response(method, params)
             if method == "getCoverArt":
                 payload = self.server.actor.core.cached_artwork(params.get("id", ""))
+            elif method == "search3":
+                # Actor admission counts unique flights, not duplicate HTTP waiters.
+                payload = self.server.actor.metadata(method, params)
             elif payload is None:
                 if not self.server.metadata_slots.acquire(blocking=False):
                     raise BridgeError(0, "Catalog busy; retry later")
@@ -426,18 +466,35 @@ class Handler(BaseHTTPRequestHandler):
                 )
                 return
             self.api_response(payload, fmt)
-        except CoverUnavailable:
-            self.reply(
-                503,
+        except CoverUnavailable as exc:
+            reason = safe_reason(getattr(exc, "reason", "lookup-failed"))
+            # go-subsonic recognizes XML errors; empty/JSON bodies are decoded as images.
+            self.api_response(
+                {
+                    "error": {
+                        "code": 0,
+                        "message": "Artwork temporarily unavailable [" + reason + "]; retry later",
+                    }
+                },
+                "xml",
+                status=getattr(exc, "status", 503),
                 extra={
-                    "Retry-After": "30",
+                    "Retry-After": str(getattr(exc, "retry_after", 30)),
                     "Cache-Control": "no-store",
                     "X-Artwork-Status": "unavailable",
+                    "X-Artwork-Reason": reason,
                 },
             )
         except BridgeError as exc:
-            self.api_response({"error": {"code": exc.code, "message": exc.message}}, fmt)
+            if method == "getCoverArt":
+                status = {0: 503, 40: 401, 70: 404}.get(exc.code, 400)
+                self.cover_error(status, exc.code, exc.message)
+            else:
+                self.api_response({"error": {"code": exc.code, "message": exc.message}}, fmt)
         except (PlayerError, OSError, ValueError, TypeError):
+            if method == "getCoverArt":
+                self.cover_error(503, 0, "Artwork temporarily unavailable")
+                return
             self.api_response(
                 {
                     "error": {
@@ -448,9 +505,27 @@ class Handler(BaseHTTPRequestHandler):
                 fmt,
             )
         except Exception:
-            self.api_response({"error": {"code": 0, "message": "Bridge operation failed"}}, fmt)
+            if method == "getCoverArt":
+                self.cover_error(503, 0, "Artwork temporarily unavailable")
+            else:
+                self.api_response({"error": {"code": 0, "message": "Bridge operation failed"}}, fmt)
 
-    def api_response(self, data, fmt):
+    def cover_error(self, status, code, message):
+        reason = {401: "authentication", 404: "item-unavailable", 400: "invalid-request"}.get(
+            status, "metadata-unavailable"
+        )
+        extra = {
+            "X-Artwork-Status": "unavailable",
+            "X-Artwork-Reason": reason,
+            "Cache-Control": "no-store",
+        }
+        if status == 503:
+            extra["Retry-After"] = "3"
+        self.api_response(
+            {"error": {"code": code, "message": message}}, "xml", status=status, extra=extra
+        )
+
+    def api_response(self, data, fmt, status=200, extra=None):
         payload = {
             "status": "failed" if "error" in data else "ok",
             "version": "1.16.1",
@@ -460,7 +535,7 @@ class Handler(BaseHTTPRequestHandler):
             **data,
         }
         body, mime = encoded_response(payload, fmt)
-        self.reply(200, body, mime)
+        self.reply(status, body, mime, extra)
 
     def do_GET(self):
         try:
@@ -483,14 +558,17 @@ class Server(ThreadingHTTPServer):
         self.metadata_slots = threading.BoundedSemaphore(4)
         self.metrics = actor.metrics
         self.covers = Covers(actor.core.cache.root / "artwork", self.metrics)
+        self.release_art = ReleaseArtwork(actor)
         try:
             super().__init__(("127.0.0.1", port), Handler)
         except Exception:
             self.covers.close()
+            self.release_art.close()
             raise
         self.hosts = {f"127.0.0.1:{self.server_port}", f"localhost:{self.server_port}"}
 
     def server_close(self):
+        self.release_art.close()
         self.covers.close()
         super().server_close()
 

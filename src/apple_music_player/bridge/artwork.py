@@ -37,6 +37,9 @@ def png(image):
 class CoverUnavailable(Exception):
     """A temporary/error response, never a successful placeholder image."""
 
+    def __init__(self, *, retry_after=30):
+        self.retry_after = retry_after
+
 
 class Covers:
     def __init__(self, root, metrics=None):
@@ -44,6 +47,8 @@ class Covers:
             root, validator=lambda url: allowed_url(url) and url != BADGE_URL, max_dimension=1024
         )
         self.pool = ThreadPoolExecutor(max_workers=2, thread_name_prefix="bridge-art")
+        self.background_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="artist-art")
+        self.background_pending = set()
         self.lock = threading.Lock()
         self.pending = {}
         self.failures = OrderedDict()
@@ -67,6 +72,7 @@ class Covers:
             success = False
         with self.lock:
             self.pending.pop(url, None)
+            self.background_pending.discard(url)
             if success:
                 self.failures.pop(url, None)
             else:
@@ -82,7 +88,7 @@ class Covers:
                     with self.cache.lock:
                         self.cache.failures.pop(old, None)
 
-    def get(self, url, size=400):
+    def get(self, url, size=400, *, background=False):
         if not url:
             self.metrics.record("cover_wait", "missing")
             return b""  # Only genuinely absent metadata gets a successful placeholder.
@@ -92,11 +98,11 @@ class Covers:
         candidate = sized_url(url, size)
         try:
             try:
-                data = self._get(candidate, deadline)
+                data = self._get(candidate, deadline, background=background)
             except CoverUnavailable:
                 if candidate == url or time.monotonic() >= deadline:
                     raise
-                data = self._get(url, deadline)
+                data = self._get(url, deadline, background=background)
             image = QImage.fromData(data)
             if max(image.width(), image.height()) > size:
                 data = png(image.scaled(size, size, Qt.KeepAspectRatio, Qt.SmoothTransformation))
@@ -106,7 +112,7 @@ class Covers:
             self.metrics.record("cover_wait", "failed", time.monotonic() - start)
             raise
 
-    def _get(self, url, deadline):
+    def _get(self, url, deadline, *, background=False):
         if not allowed_url(url) or url == BADGE_URL:
             raise CoverUnavailable()
         # Warm disk hits don't consume a network worker or pending admission slot.
@@ -126,10 +132,13 @@ class Covers:
                 self.failures.pop(url, None)
             future = self.pending.get(url)
             if future is None:
-                if len(self.pending) >= 8:
+                if len(self.pending) >= 8 or (background and len(self.background_pending) >= 2):
                     self.metrics.record("cover_wait", "busy")
-                    raise CoverUnavailable()
-                future = self.pool.submit(self.load, url)
+                    raise CoverUnavailable(retry_after=1)
+                pool = self.background_pool if background else self.pool
+                future = pool.submit(self.load, url)
+                if background:
+                    self.background_pending.add(url)
                 self.pending[url] = future
                 created = True
             else:
@@ -151,3 +160,4 @@ class Covers:
         with self.lock:
             self.closed = True
         self.pool.shutdown(wait=False, cancel_futures=True)
+        self.background_pool.shutdown(wait=False, cancel_futures=True)

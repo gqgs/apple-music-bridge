@@ -346,7 +346,8 @@ def test_failures_are_not_successful_images_and_diagnostics_are_sanitized(bridge
     server.actor.call("remember", [replace(ALBUM, artwork_url=URL)])
     response = request(server, "getCoverArt", {"id": "am:br:lossless:album:2"})
     assert response[0] == 503 and response[1]["Cache-Control"] == "no-store"
-    assert not response[2]  # Supersonic cannot decode/cache a successful placeholder.
+    assert response[1]["Content-Type"].startswith("application/xml")
+    assert b"<error " in response[2]  # go-subsonic parses XML instead of decoding an image.
     diagnostics = payload(server, "getBridgeDiagnostics")
     assert diagnostics["status"] == "ok" and diagnostics["bridgeDiagnostics"]["metric"]
     text = str(diagnostics)
@@ -390,7 +391,71 @@ def test_busy_metadata_is_not_a_successful_placeholder(bridge):
         connection.execute("BEGIN EXCLUSIVE")
         response = request(server, "getCoverArt", {"id": "am:br:lossless:album:2"})
         assert response[1]["Content-Type"] != "image/png"
-        assert b'"status": "failed"' in response[2]
+        assert b'status="failed"' in response[2]
     finally:
         connection.rollback()
         connection.close()
+
+
+def raw_cover_response(server, identifier, *, timeout=3):
+    import http.client
+    from urllib.parse import urlencode
+
+    from test_bridge import KEY
+
+    conn = http.client.HTTPConnection("127.0.0.1", server.server_port, timeout=timeout)
+    try:
+        query = urlencode(
+            {"apiKey": KEY, "v": "1.16.1", "c": "fixture", "f": "json", "id": identifier}
+        )
+        conn.request("GET", "/rest/getCoverArt?" + query)
+        response = conn.getresponse()
+        return response.status, response.headers, response.read()
+    finally:
+        conn.close()
+
+
+def test_album_success_has_one_cache_policy_and_needs_no_client_retry(bridge, monkeypatch):
+    server, _ = bridge
+    calls = transport(monkeypatch, image_bytes("JPEG"))
+    server.actor.call("remember", [replace(ALBUM, artwork_url=URL)])
+    responses = []
+    # Mirror the current client's first-header no-store retry decision, without sleeps.
+    for _ in range(4):
+        status, headers, body = raw_cover_response(server, "am:br:lossless:album:2")
+        responses.append(status)
+        assert status == 200 and not QImage.fromData(body).isNull()
+        if "no-store" not in headers.get("Cache-Control", ""):
+            break
+    assert responses == [200]
+    assert headers.get_all("Cache-Control") == ["private, max-age=86400"]
+    assert len(calls) == 1
+
+
+def test_cover_failure_has_one_no_store_policy(bridge, monkeypatch):
+    server, _ = bridge
+    server.actor.call("remember", [replace(ALBUM, artwork_url=URL)])
+    transport(monkeypatch, b"invalid image")
+    status, headers, body = raw_cover_response(server, "am:br:lossless:album:2")
+    assert status == 503
+    assert headers.get_all("Cache-Control") == ["no-store"]
+    assert headers.get_content_type() == "application/xml" and b"<error " in body
+
+
+@pytest.mark.parametrize(
+    "params,auth,status,reason",
+    [
+        ({"id": "artist-release:am:br:lossless:artist:999"}, True, 404, "item-unavailable"),
+        ({"id": "artist-image:am:br:lossless:artist:1"}, True, 404, "item-unavailable"),
+        ({"id": "am:br:lossless:album:2", "size": "invalid"}, True, 400, "invalid-request"),
+        ({"id": "am:br:lossless:album:2"}, False, 401, "authentication"),
+    ],
+)
+def test_cover_protocol_errors_never_look_like_successful_images(
+    bridge, params, auth, status, reason
+):
+    server, _ = bridge
+    actual, headers, body = request(server, "getCoverArt", dict(params, f="json"), auth=auth)
+    assert actual == status and headers["X-Artwork-Reason"] == reason
+    assert headers["Cache-Control"] == "no-store"
+    assert headers["Content-Type"].startswith("application/xml") and b"<error " in body

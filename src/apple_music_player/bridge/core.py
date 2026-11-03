@@ -1,5 +1,6 @@
 """Serialized catalog/cache ownership; completed files are leased to HTTP workers."""
 
+import hmac
 import json
 import os
 import re
@@ -9,9 +10,9 @@ import stat
 import threading
 import time
 from collections import Counter
-from concurrent.futures import ThreadPoolExecutor, TimeoutError
+from concurrent.futures import Future, ThreadPoolExecutor, TimeoutError
 from contextlib import closing
-from dataclasses import asdict
+from dataclasses import asdict, dataclass
 from datetime import date
 from urllib.parse import quote
 
@@ -55,10 +56,33 @@ class Core:
         self.runtime = self.downloader = None
         self.pins = {}
         self.operation_deadline = None
+        self.operation_cancel = None
         self._counts = None
         self.cache.db.execute(
             "CREATE TABLE IF NOT EXISTS bridge_metadata (id TEXT PRIMARY KEY, data TEXT)"
         )
+        self.cache.db.execute(
+            "CREATE INDEX IF NOT EXISTS bridge_artist_art_idx "
+            "ON bridge_metadata(json_extract(data, '$.artist_id'))"
+        )
+        self.cache.db.execute(
+            "CREATE TABLE IF NOT EXISTS bridge_release_checks "
+            "(id TEXT PRIMARY KEY, retry_after REAL NOT NULL)"
+        )
+        self.cache.db.execute(
+            "CREATE TABLE IF NOT EXISTS bridge_artist_releases "
+            "(artist TEXT NOT NULL, album TEXT NOT NULL, PRIMARY KEY(artist,album))"
+        )
+        if "reason" not in {
+            row[1] for row in self.cache.db.execute("PRAGMA table_info(bridge_release_checks)")
+        }:
+            self.cache.db.execute(
+                "ALTER TABLE bridge_release_checks ADD COLUMN reason TEXT NOT NULL "
+                "DEFAULT 'release-failed'"
+            )
+            # Old misses may have rejected valid collaborator releases. Expire
+            # only these lookup checks; bounded admission still applies.
+            self.cache.db.execute("UPDATE bridge_release_checks SET retry_after=0")
         self.cache.db.commit()
         try:
             if runtime_root is not None:
@@ -119,8 +143,27 @@ class Core:
         ]
 
     def check_deadline(self):
+        if self.operation_cancel is not None and self.operation_cancel.is_set():
+            raise BridgeError(0, "Catalog request abandoned")
         if self.operation_deadline is not None and time.monotonic() >= self.operation_deadline:
             raise BridgeError(0, "Catalog request expired; retry when ready")
+
+    def cached_artist(self, identifier):
+        self.parse(identifier, "artist")
+        uri = "file:" + quote(str(self.cache.root / "index.sqlite3")) + "?mode=ro"
+        try:
+            with closing(sqlite3.connect(uri, uri=True, timeout=0.1)) as db:
+                row = db.execute(
+                    "SELECT data FROM bridge_metadata WHERE id=?", (identifier,)
+                ).fetchone()
+            if not row:
+                raise BridgeError(70, "Unknown artist")
+            artist = Artist(**json.loads(row[0]))
+            if self.identity(artist) != identifier:
+                raise BridgeError(70, "Unknown artist")
+            return artist
+        except sqlite3.OperationalError:
+            raise BridgeError(0, "Artist metadata temporarily unavailable") from None
 
     def cached_artwork(self, identifier):
         # Read-only, per-request SQLite connection: covers never queue behind a
@@ -164,6 +207,9 @@ class Core:
                     and time.monotonic() + exc.seconds >= self.operation_deadline
                 ):
                     raise BridgeError(0, "Catalog request expired; retry when ready") from None
+                if self.operation_deadline is not None:
+                    # HTTP callers defer outside the sole catalog/cache worker.
+                    raise
                 self.cancel.wait(exc.seconds)
                 budget -= exc.seconds
         raise AssertionError("unreachable")
@@ -190,6 +236,19 @@ class Core:
 
     def albums(self, artist):
         values = self.remember(self.request(self.catalog.artist_albums, artist.id, artist.country))
+        # Preserve the exact lookup association even when a collaborator is the
+        # collection's primary artist. Never infer this from names/search results.
+        artist_key = self.identity(artist)
+        for album in values:
+            self.cache.db.execute(
+                "INSERT OR REPLACE INTO bridge_artist_releases VALUES (?,?)",
+                (artist_key, self.identity(album)),
+            )
+        self.cache.db.execute(
+            "DELETE FROM bridge_artist_releases WHERE rowid NOT IN "
+            "(SELECT rowid FROM bridge_artist_releases ORDER BY rowid DESC LIMIT 10000)"
+        )
+        self.cache.db.commit()
         return [album for _, group in grouped_releases(values) for album in group]
 
     def songs(self, album):
@@ -201,8 +260,17 @@ class Core:
         if not query.strip():
             values = self.known(kind)
         else:
+            # Public search has a bounded result window, not a documented offset.
+            # Fetch the required prefix and slice locally; never refetch page one as
+            # a later page, or claim an unlimited Apple Music catalog.
+            if offset >= 200:
+                return []
             entity = {"artist": "musicArtist", "album": "album", "song": "song"}[kind]
-            values = self.remember(self.request(self.catalog.search, query, self.country, entity))
+            values = self.remember(
+                self.request(
+                    self.catalog.search, query, self.country, entity, limit=min(200, offset + count)
+                )
+            )
         return values[offset : offset + count]
 
     def child_counts(self):
@@ -214,10 +282,12 @@ class Core:
         return self._counts
 
     def describe(self, item):
-        result = {"id": self.identity(item), "name": item.title, "coverArt": self.identity(item)}
+        result = {"id": self.identity(item), "name": item.title}
         if isinstance(item, Artist):
-            result["albumCount"] = self.child_counts()[0][item.id]
+            # An artwork resolver ID, not a claim of a portrait or complete discography.
+            result["coverArt"] = "artist-release:" + self.identity(item)
             return result
+        result["coverArt"] = self.identity(item)
         result.update(
             name=item.album_title if isinstance(item, Album) else item.track_name or item.title,
             artist=item.artist,
@@ -347,12 +417,20 @@ class Core:
             self.cache.close()
 
 
+@dataclass
+class SearchFlight:
+    future: Future
+    stopped: threading.Event
+    waiters: int = 0
+
+
 class Actor:
     """One catalog/cache owner and one bounded download worker; shared catalog limiter."""
 
     def __init__(self, factory):
         self.cancel = threading.Event()
         self.metrics = Metrics()
+        self.last_metadata = 0.0
         self.pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="bridge-core")
         self.metadata_pending = threading.BoundedSemaphore(4)
         future = self.pool.submit(factory, self.cancel)
@@ -371,6 +449,10 @@ class Actor:
 
         self.download_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="bridge-download")
         self.download_slots = threading.BoundedSemaphore(4)
+        self.search_pool = ThreadPoolExecutor(max_workers=4, thread_name_prefix="bridge-search")
+        self.search_lock = threading.Lock()
+        self.search_flights = {}
+        self.search_key = os.urandom(32)
 
     def acquire(self, identifier, cached_only=False):
         try:
@@ -419,45 +501,136 @@ class Actor:
     def call(self, method, *args, **kwargs):
         return self.pool.submit(getattr(self.core, method), *args, **kwargs).result()
 
-    def metadata(self, method, params, timeout=20):
+    def metadata(self, method, params, timeout=12):
+        self.last_metadata = time.monotonic()
+        if method != "search3":
+            return self._metadata(method, params, timeout)
+        # HTTP authentication precedes this call. Preserve user/API-key and client
+        # identity plus every semantic parameter; ignore only per-request password/
+        # salted-token material. Never store/log a credential-bearing cache key.
+        identity = {k: v for k, v in params.items() if k not in {"p", "t", "s"}}
+        key = hmac.digest(self.search_key, json.dumps(identity, sort_keys=True).encode(), "sha256")
+        created = False
+        with self.search_lock:
+            if self.cancel.is_set():
+                raise BridgeError(0, "Bridge stopping")
+            flight = self.search_flights.get(key)
+            if flight is None:
+                if len(self.search_flights) >= 4:
+                    raise BridgeError(0, "Catalog busy; retry later")
+                stopped = threading.Event()
+                future = self.search_pool.submit(self._metadata, method, dict(params), 12, stopped)
+                flight = SearchFlight(future, stopped)
+                self.search_flights[key] = flight
+                created = True
+            elif flight.stopped.is_set():
+                raise BridgeError(0, "Catalog busy; retry later")
+            flight.waiters += 1
+        if created:
+
+            def finished(_):
+                with self.search_lock:
+                    if self.search_flights.get(key) is flight:
+                        del self.search_flights[key]
+
+            flight.future.add_done_callback(finished)
+        else:
+            self.metrics.record("search_flight", "joined")
+        try:
+            # Independent caller deadline; the shared operation has its own bounded
+            # 12s lifetime. A short-lived caller cannot cancel another waiter.
+            return flight.future.result(timeout=timeout)
+        except TimeoutError:
+            self.metrics.record("metadata", "timeout")
+            raise BridgeError(0, "Catalog busy or timed out; retry later") from None
+        finally:
+            with self.search_lock:
+                flight.waiters -= 1
+                if not flight.waiters and not flight.future.done():
+                    flight.stopped.set()
+
+    def _metadata(self, method, params, timeout=12, abandoned=None):
         if not self.metadata_pending.acquire(blocking=False):
             self.metrics.record("metadata_queue", "busy")
             raise BridgeError(0, "Catalog busy; retry later")
         queued = time.monotonic()
         deadline = queued + timeout
+        future = None
 
-        def invoke():
+        def invoke(submitted):
             started = time.monotonic()
-            self.metrics.record("metadata_queue", "ok", started - queued)
+            self.metrics.record("metadata_queue", "ok", started - submitted)
             self.core.operation_deadline = deadline
+            self.core.operation_cancel = abandoned
+            outcome = "ok"
             try:
                 self.core.check_deadline()
-                result = self.core.dispatch(method, params)
-                self.metrics.record("metadata", "ok", time.monotonic() - started)
-                return result
+                if self.cancel.is_set():
+                    raise BridgeError(0, "Bridge stopping")
+                return self.core.dispatch(method, params)
+            except CatalogDeferred:
+                outcome = "deferred"
+                raise
             except Exception:
-                self.metrics.record("metadata", "failed", time.monotonic() - started)
+                outcome = "failed"
                 raise
             finally:
+                self.metrics.record("metadata_work", outcome, time.monotonic() - started)
                 self.core.operation_deadline = None
-                self.metadata_pending.release()
+                self.core.operation_cancel = None
 
         try:
-            future = self.pool.submit(invoke)
-        except Exception:
-            self.metadata_pending.release()
-            raise
-        try:
-            return future.result(timeout=timeout)
+            # Replay dispatch after deferral: completed catalog responses are cached.
+            # Admission spans all attempts; neither queued time nor Retry-After resets
+            # the original deadline. Bound wakeups even for an invalid zero delay.
+            for _ in range(32):
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise TimeoutError
+                if self.cancel.is_set():
+                    raise BridgeError(0, "Bridge stopping")
+                if abandoned is not None and abandoned.is_set():
+                    raise BridgeError(0, "Catalog request abandoned")
+                future = self.pool.submit(invoke, time.monotonic())
+                try:
+                    result = future.result(timeout=remaining)
+                except CatalogDeferred as exc:
+                    delay = max(0.01, exc.seconds)
+                    if not 0 <= exc.seconds <= 30 or time.monotonic() + delay >= deadline:
+                        raise BridgeError(0, "Catalog rate limit; retry later") from None
+                    started = time.monotonic()
+                    stopped = (abandoned or self.cancel).wait(delay)
+                    self.metrics.record(
+                        "catalog_wait",
+                        "rate_limited" if exc.rate_limited else "deferred",
+                        time.monotonic() - started,
+                    )
+                    if stopped:
+                        raise BridgeError(0, "Bridge stopping") from None
+                    continue
+                self.metrics.record("metadata", "ok", time.monotonic() - queued)
+                return result
+            raise BridgeError(0, "Catalog rate limit; retry later")
         except TimeoutError:
             self.metrics.record("metadata", "timeout", time.monotonic() - queued)
-            # Keep the admission slot until the executor drains this task. Cancelling
-            # a Future alone leaves its work item queued, allowing unbounded buildup.
-            # Expired queued tasks skip dispatch when they reach the worker.
             raise BridgeError(0, "Catalog busy or timed out; retry later") from None
+        except Exception:
+            self.metrics.record("metadata", "failed", time.monotonic() - queued)
+            raise
+        finally:
+            # Timed-out work retains admission until drained. Cancelling a Future
+            # leaves its executor work item queued and could permit unbounded buildup.
+            if future is None:
+                self.metadata_pending.release()
+            else:
+                future.add_done_callback(lambda _: self.metadata_pending.release())
 
     def close(self):
         self.cancel.set()
+        with self.search_lock:
+            for flight in self.search_flights.values():
+                flight.stopped.set()
+        self.search_pool.shutdown(wait=True)
         self.download_pool.shutdown(wait=True, cancel_futures=True)
         try:
             self.pool.submit(self.core.close).result()

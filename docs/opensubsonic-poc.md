@@ -302,7 +302,7 @@ calls. This is a scheduling model, not measured live Apple latency. Album expans
 adds more requests; network time is additional. No parallel upstream requests,
 rate-limit bypass, hidden result-type omission or inferred query cancellation is used.
 
-Each admitted HTTP metadata operation now has a 20-second deadline including its
+Each admitted HTTP metadata operation now has a 12-second deadline including its
 queue wait. Expired queued tasks skip dispatch and retain their admission slots until drained
 (to bound the executor queue even during a stalled upstream request); running work checks the deadline
 before/after upstream calls and before cooldown sleeps, so it does not proceed to
@@ -388,3 +388,128 @@ HTTP regressions across all four album response locations.
 Protocol source: [OpenSubsonic AlbumID3 releaseTypes](https://opensubsonic.netlify.app/docs/responses/albumid3/),
 an optional array of strings rather than a closed enum. This metadata does not
 claim complete or authoritative release categorization.
+
+## Metadata scheduling follow-up (#8)
+
+Catalog cooldown and HTTP 429 deferrals now wait outside the sole catalog/cache
+worker. A warm artist lookup can finish while a cold search waits for its next
+public request. Each logical RPC keeps one of four admission slots and its original
+12-second deadline across retries. Completed catalog responses are reused on retry;
+expired queued work is drained before releasing admission. Shutdown interrupts waits.
+The same shared three-second spacing and upstream Retry-After remain enforced.
+
+Diagnostics now distinguish `metadata_queue` (each executor admission),
+`metadata_work` (each dispatch attempt, including blocking upstream I/O), and
+`catalog_wait` (deferred time outside the worker). `catalog_wait:rate_limited`
+identifies an explicit 429 deferral; `deferred` may include either local spacing or
+an already-established upstream cooldown. `metadata` measures the complete logical
+RPC, including queue and deferred time, rather than only its dispatch execution.
+Counts across these stages need not match. All remain aggregate and secret-free.
+
+A synthetic regression with the real Catalog limiter/cache performs four requests
+at least three seconds apart. A cached artist request completes within one second
+while the cold three-entity search waits. On the previous implementation that warm
+request times out in the regression. This fixes head-of-line blocking during waits,
+not all search latency: a cold search still needs multiple spaced public requests,
+and a blocking upstream network call (15-second socket timeout) can still occupy the
+worker. Supersonic's additional artist/album lookups add demand. Live client retesting
+is required; cumulative maxima cannot attribute a timeout to a specific query, and
+the reported successful cover fetches do not establish artwork as the cause.
+
+
+### Rapid typing remains a client integration problem
+
+Source inspection of Supersonic fork commit
+[`95df47f`](https://github.com/gqgs/supersonic/tree/95df47fea0e8e232047444b35c7617a2865157f6)
+found a 200ms SearchEntry debounce, a separate goroutine per search, and generation
+checks on returned UI results rather than HTTP cancellation. Its configured default
+HTTP timeout is 15 seconds. Four cold queries (`b`, `bj`, `bjo`, `bjor`) may require
+12 public catalog requests, at least 33 seconds between the first and last starts.
+Worker fairness does not remove that upstream capacity limit.
+
+The bridge metadata deadline is now 12 seconds, below that client default, so it
+can return a structured error before the client abandons the response. This is a
+bounded failure improvement, **not a fix for superseded search traffic**. Different
+client timeout settings or a blocked local HTTP writer can still time out. Already
+running upstream I/O is not forcibly interrupted; expired dispatch stops before
+starting another entity request.
+
+The bridge deliberately does not cancel queries based on `c`, the account, localhost,
+or query prefixes: different windows/clients may share all of those. A complete
+integration needs client-side search-on-submit/debouncing and per-view cancellation,
+plus a reliable cancellation signal (or explicit random per-view session ID and
+monotonic generation) to retire server-side work. Merely hiding old UI results or
+raising the HTTP timeout is insufficient. No new session protocol is silently
+assumed here, and no Supersonic source was copied into this project.
+
+
+Identical concurrent `search3` calls now use singleflight: one bounded shared job,
+up to four distinct jobs, and at most the existing 16 HTTP handlers. Only exact
+semantic parameters in the same authenticated identity/client scope share work;
+per-request password/token/salt differences are ignored after authentication. Keys
+are ephemeral process-keyed HMACs, never credential-bearing log/cache filenames.
+Different queries, users/API keys, client names, pagination and entity counts remain
+separate. Each waiter has its own deadline; timing out one waiter does not cancel
+others. When all waiters leave, pending work stops at the next safe boundary; a
+blocking upstream call is not forcibly interrupted. Completed/failed flights are
+removed, not retained as a result/error cache. `search_flight:joined` counts duplicate
+waiters without exposing identities or queries.
+
+The HTTP regression sends eight simultaneous identical searches and verifies one
+three-entity dispatch serves all eight. This complements a longer client debounce;
+it deliberately does not collapse the four distinct typing-prefix queries. Client
+cancellation/debounce changes are separate from this bridge PR.
+
+### Artist-first client search contract
+
+A client can request only artists with `search3`, `artistCount=20`, `albumCount=0`,
+`songCount=0`, and `artistOffset=0`. This makes one cold upstream request instead
+of three. Album-only and song-only requests work the same way; mixed requests and
+omitted counts (20 each) retain their normal protocol meaning. No client names are
+special-cased and no requested category is silently discarded.
+
+The bridge requests an upstream limit of `min(offset + count, 200)` for each enabled
+category, then slices locally. For example, the second artist page (`offset=20`,
+`count=20`) fetches a 40-result prefix and returns entries 21–40. Identical pages
+reuse the catalog cache; a larger prefix is another request through the shared
+three-second limiter. No undocumented upstream offset is sent. Offset 200 returns
+an empty page without another request. This is a bounded public search window,
+not full-catalog pagination; upstream ranking/catalog changes can shift pages.
+Qt defaults remain 50 artists/songs and 200 albums. Artist/album detail lookups
+remain explicit, separate operations. Client-side artist-first navigation must
+avoid automatic album/song expansion to realize the latency benefit.
+
+[Apple's public Search API documentation](https://performance-partners.apple.com/search-api)
+specifies limits from 1 to 200 and recommends reducing requested result counts for
+response time. Its documented search parameters do not include an offset. The
+bridge's prefix-and-slice approach makes that limitation explicit.
+
+### Artist counts and release covers
+
+Artist search/index entries omit optional `albumCount` and `artistImageUrl`:
+public artist search does not supply a verified total discography count or a
+supported portrait source. `getArtist.albumCount` counts only albums returned in
+that response, subject to lookup limits and storefront coverage. Clients should
+hide missing counts instead of presenting zero as a verified total.
+
+Artist entries advertise a `coverArt` resolver ID. This uses exact-artist and
+storefront release artwork, not a portrait. Search and index responses do not
+expand artists into album lookups. See [artist artwork](artist-artwork.md) for
+background limits, cache behavior, pending responses and source metadata.
+
+Album-only client search (`artistCount=0`, `albumCount=50`, `songCount=0`) is covered
+by an authenticated HTTP regression: exactly one upstream album request, limit 50.
+Clients must also stop eagerly expanding artist/song matches; otherwise the earlier
+multi-request latency returns. A live public artist-response check was unavailable
+through the web tool during this change; no new portrait endpoint or URL was guessed.
+
+
+### Optional lyrics requests
+
+The bridge has no lyrics source. `getLyrics` returns an empty `lyrics` object and
+`getLyricsBySongId` returns an empty `structuredLyrics` list, after authentication
+and typed song-ID validation. Neither request fetches catalog or lyric data.
+These use the [standard lyrics response](https://opensubsonic.netlify.app/docs/endpoints/getlyrics/)
+and [structured lyrics list](https://opensubsonic.netlify.app/docs/endpoints/getlyricsbysongid/)
+shapes, rather than reporting an unimplemented endpoint during ordinary playback.
+This is an empty-result compatibility response, not lyrics support or a new provider.

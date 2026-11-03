@@ -15,11 +15,17 @@ class Metrics:
             "cover_wait",
             "metadata_queue",
             "metadata",
+            "metadata_work",
+            "catalog_wait",
+            "search_flight",
             "download",
         }:
             raise ValueError("Unknown metric stage")
         if outcome not in {
             "hit",
+            "joined",
+            "deferred",
+            "rate_limited",
             "miss",
             "ok",
             "failed",

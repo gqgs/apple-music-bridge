@@ -14,6 +14,7 @@ class Artist:
     id: str
     title: str
     genre: str = ""
+    store_url: str = ""
 
 
 @dataclass(frozen=True)

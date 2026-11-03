@@ -188,6 +188,7 @@ class Catalog:
                 str(row["artistId"]),
                 public_text(row["artistName"]),
                 public_text(row.get("primaryGenreName", "")),
+                public_text(row.get("artistLinkUrl") or row.get("artistViewUrl") or "", 2048),
             )
             for row in rows
             if isinstance(row, dict)

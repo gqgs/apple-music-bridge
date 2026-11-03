@@ -42,3 +42,8 @@ For a failed download, see [safe diagnostic categories](docs/download-diagnostic
 The original [SVG logo](src/apple_music_player/assets/logo.svg) is bundled as the Qt application/window icon; it scales without additional dependencies. This project is not affiliated with Apple.
 
 Home defaults to local recently played albums, with recent releases from artists played. See [browsing scope, artwork conditions and history storage](docs/browsing.md). Legacy external-backend settings now lead to managed setup; no old installations, downloads or sessions are deleted. Existing managed sessions continue unchanged. The pinned amdl engine remains an external dependency.
+
+
+The optional bridge experiment `--artist-images` resolves Commons artist images
+through verified MusicBrainz links, without blocking search. See [setup, image
+credits and coverage limits](docs/artist-images.md). It is disabled by default.

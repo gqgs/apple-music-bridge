@@ -496,8 +496,8 @@ in that response, subject to the public lookup limit and storefront coverage.
 [OpenSubsonic ArtistID3](https://opensubsonic.netlify.app/docs/responses/artistid3/)
 makes those fields optional. Clients that decode missing counts into a plain integer
 must hide the unknown card count rather than display zero as a verified total.
-No count-enrichment lookup is performed per search card. Artist images remain
-unavailable; album artwork is not repurposed as a portrait. Explicit requests for
+No count-enrichment lookup is performed per search card. Artist images are absent by default; the opt-in [Commons image experiment](artist-images.md)
+uses separate identity/provenance checks. Album artwork is not repurposed as a portrait. Explicit requests for
 an old artist cover ID continue to receive a neutral placeholder for compatibility,
 but new responses no longer advertise that placeholder as available artwork.
 

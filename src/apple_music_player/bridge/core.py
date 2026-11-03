@@ -46,10 +46,12 @@ class Core:
         downloader_factory=None,
         runtime_root=None,
         cancel=None,
+        artist_images=False,
     ):
         if not re.fullmatch(r"[a-z]{2}", country) or quality not in {"lossless", "atmos"}:
             raise ValueError("Invalid storefront or quality")
         self.country, self.quality = country, quality
+        self.artist_images = artist_images
         self.cancel = cancel or threading.Event()
         self.cache = Cache(root, limit)
         self.catalog = catalog or Catalog()
@@ -125,6 +127,23 @@ class Core:
             raise BridgeError(0, "Catalog request abandoned")
         if self.operation_deadline is not None and time.monotonic() >= self.operation_deadline:
             raise BridgeError(0, "Catalog request expired; retry when ready")
+
+    def cached_artist(self, identifier):
+        self.parse(identifier, "artist")
+        uri = "file:" + quote(str(self.cache.root / "index.sqlite3")) + "?mode=ro"
+        try:
+            with closing(sqlite3.connect(uri, uri=True, timeout=0.1)) as db:
+                row = db.execute(
+                    "SELECT data FROM bridge_metadata WHERE id=?", (identifier,)
+                ).fetchone()
+            if not row:
+                raise BridgeError(70, "Unknown artist")
+            artist = Artist(**json.loads(row[0]))
+            if self.identity(artist) != identifier:
+                raise BridgeError(70, "Unknown artist")
+            return artist
+        except sqlite3.OperationalError:
+            raise BridgeError(0, "Artist metadata temporarily unavailable") from None
 
     def cached_artwork(self, identifier):
         # Read-only, per-request SQLite connection: covers never queue behind a
@@ -234,6 +253,8 @@ class Core:
         if isinstance(item, Artist):
             # Public artist search supplies neither a discography count nor a
             # verified portrait. Optional fields stay absent, not cache-derived.
+            if self.artist_images:
+                result["coverArt"] = "artist-image:" + self.identity(item)
             return result
         result["coverArt"] = self.identity(item)
         result.update(

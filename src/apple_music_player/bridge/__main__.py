@@ -39,6 +39,11 @@ def main():
         action="store_true",
         help="Print aggregate timings/outcomes without queries, URLs or credentials",
     )
+    parser.add_argument(
+        "--artist-images",
+        action="store_true",
+        help="Experimental Commons artist images; requires a client that displays image credits",
+    )
     args = parser.parse_args()
     os.umask(0o077)
 
@@ -63,6 +68,7 @@ def main():
                 args.quality,
                 runtime_root=args.start_runtime,
                 cancel=cancel,
+                artist_images=args.artist_images,
             )
         )
         server = Server(actor, credentials, args.port, args.quality)

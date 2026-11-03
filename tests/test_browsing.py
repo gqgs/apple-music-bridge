@@ -572,10 +572,18 @@ def test_album_header_compact_rows_badge_and_search_transition(app, tmp_path, mo
 
 
 def test_album_header_without_artwork_does_not_request_badge(app):
+    from PySide6.QtCore import QCoreApplication, QEvent
+
     from apple_music_player.browsing import AlbumHeader
 
     artwork = Mock()
     header = AlbumHeader(artwork)
-    header.set_album(Album("br", "123", "No artwork"), 10)
-    header.refresh()
-    artwork.get.assert_not_called()
+    try:
+        header.set_album(Album("br", "123", "No artwork"), 10)
+        header.refresh()
+        artwork.get.assert_not_called()
+    finally:
+        # Unlike production's parent-owned header, this standalone widget must be
+        # destroyed while QApplication is alive, not during interpreter shutdown.
+        header.deleteLater()
+        QCoreApplication.sendPostedEvents(None, QEvent.DeferredDelete)

@@ -1,5 +1,6 @@
 """Small native album panels shared by Home, catalog detail and now playing."""
 
+import re
 from urllib.parse import urlsplit
 
 from PySide6.QtCore import QEvent, QRect, QSize, Qt, Signal
@@ -19,6 +20,7 @@ from PySide6.QtWidgets import (
 )
 
 from .artwork import BADGE_URL, allowed_url
+from .model import Artist
 
 
 def store_link(album):
@@ -163,6 +165,8 @@ class AlbumCard(QFrame):
 class AlbumHeader(QWidget):
     """One album identity above its compact track list; no per-track artwork."""
 
+    artist_opened = Signal(object)
+
     def __init__(self, artwork):
         super().__init__()
         self.artwork, self.album = artwork, None
@@ -176,8 +180,16 @@ class AlbumHeader(QWidget):
         self.title.setTextFormat(Qt.PlainText)
         self.title.setWordWrap(True)
         self.title.setStyleSheet("font-size: 20px; font-weight: 600")
-        self.artist = QLabel()
-        self.artist.setTextFormat(Qt.PlainText)
+        self.artist = QPushButton()
+        self.artist.setFlat(True)
+        self.artist.setCursor(Qt.PointingHandCursor)
+        self.artist.setStyleSheet(
+            "QPushButton { text-align: left; padding: 2px; border: 1px solid transparent; }"
+            "QPushButton:enabled { color: palette(link); text-decoration: underline; }"
+            "QPushButton:enabled:hover, QPushButton:enabled:focus {"
+            " border: 1px solid palette(highlight); }"
+        )
+        self.artist.clicked.connect(self.open_artist)
         self.details = QLabel()
         self.details.setTextFormat(Qt.PlainText)
         text.addWidget(self.title)
@@ -193,11 +205,28 @@ class AlbumHeader(QWidget):
         self.setVisible(album is not None)
         if album:
             self.title.setText(album.album_title or album.title.removesuffix(" — " + album.artist))
-            self.artist.setText(album.artist)
+            self.artist.setText(album.artist.replace("&", "&&"))
+            available = bool(album.artist and re.fullmatch(r"[0-9]+", album.artist_id))
+            self.artist.setEnabled(available)
+            self.artist.setCursor(Qt.PointingHandCursor if available else Qt.ArrowCursor)
+            self.artist.setAccessibleName(
+                ("Open artist albums: " if available else "Album artist: ") + album.artist
+            )
+            self.artist.setToolTip(
+                "Open this artist’s albums in the player"
+                if available
+                else "The catalog did not provide an album artist ID"
+            )
             self.details.setText(
                 " · ".join(x for x in (album.release_date[:10], f"{count} tracks") if x)
             )
             set_artwork_pixmap(self.cover, QImage())
+
+    def open_artist(self):
+        if self.album and self.artist.isEnabled():
+            self.artist_opened.emit(
+                Artist(self.album.country, self.album.artist_id, self.album.artist)
+            )
 
     def refresh(self):
         if not self.album or not allowed_url(self.album.artwork_url):

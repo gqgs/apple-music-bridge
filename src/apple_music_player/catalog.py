@@ -263,9 +263,7 @@ class Catalog:
                 **row,
                 "_album_artist": collection.get("artistName", "") or row.get("artistName", ""),
                 "_album_artist_id": (
-                    collection.get("artistId", "")
-                    if collection.get("artistName")
-                    else row.get("artistId", "")
+                    collection.get("artistId", "") if collection.get("artistName") else ""
                 ),
             }
             for row in rows

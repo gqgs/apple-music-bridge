@@ -1,6 +1,7 @@
 import json
 import threading
 
+import pytest
 from conftest import wait_until
 from PySide6.QtWidgets import QApplication
 
@@ -141,6 +142,126 @@ def test_stale_artist_lookup_cannot_overwrite_new_region_search(app, tmp_path, m
         wait_until(lambda: (app.processEvents(), window.tick(), window.catalog_future is None)[2])
         assert window.results == [Artist("gb", "302", "New artist", "Alternative")]
         assert window.last_artist_diagnostics is None
+    finally:
+        release.set()
+        window.close()
+
+
+def test_album_artist_button_navigates_by_collection_identity(app, tmp_path, monkeypatch):
+    from PySide6.QtCore import Qt
+    from PySide6.QtTest import QTest
+
+    window = Window(tmp_path / "cache")
+    window.startup_attempted = True
+    monkeypatch.setattr(window.controller, "tick", lambda: None)
+    calls = []
+
+    def request(endpoint, **params):
+        calls.append(params)
+        if params["entity"] == "album":
+            return [ARTIST, ALBUM]
+        return [ALBUM, dict(SONG, artistId=999, artistName="Guest performer")]
+
+    monkeypatch.setattr(window.catalog, "request", request)
+
+    def settle():
+        wait_until(lambda: (app.processEvents(), window.tick(), window.catalog_future is None)[2])
+
+    try:
+        window.show()
+        window.open_album(Album("br", "101", "Atlanta Millionaires Club"))
+        settle()
+        button = window.album_header.artist
+        assert button.isEnabled()
+        assert button.text() == "Faye Webster"
+        assert "Open artist albums" in button.accessibleName()
+        QTest.mouseClick(button, Qt.LeftButton)
+        assert "Loading" in window.catalog_status.text()
+        settle()
+        assert calls[-1] == dict(id="301", country="br", entity="album", limit=200)
+        assert window.results[0].id == "101"
+        window.selected_button.click()
+        settle()
+        assert window.album_header.artist.isEnabled()
+        assert window.album_tracks[0].artist_id == "999"
+        assert window.album_header.album.artist_id == "301"
+        window.album_header.artist.setFocus()
+        QTest.keyClick(window.album_header.artist, Qt.Key_Space)
+        settle()
+        assert calls[-1]["id"] == "301"
+        assert not window.controller.queue
+    finally:
+        window.close()
+
+
+@pytest.mark.parametrize(
+    "collection",
+    [
+        dict(ALBUM, artistId=""),
+        dict(ALBUM, artistId="invalid"),
+        dict(ALBUM, artistName="Various Artists", artistId=""),
+        None,
+    ],
+)
+def test_missing_album_artist_id_never_infers_track_performer(
+    app, tmp_path, monkeypatch, collection
+):
+    window = Window(tmp_path / "cache")
+    window.startup_attempted = True
+    monkeypatch.setattr(window.controller, "tick", lambda: None)
+    monkeypatch.setattr(
+        window.catalog, "request", lambda *a, **k: ([collection] if collection else []) + [SONG]
+    )
+    try:
+        window.open_album(Album("br", "101", "Fixture"))
+        wait_until(lambda: (app.processEvents(), window.tick(), window.catalog_future is None)[2])
+        assert not window.album_header.artist.isEnabled()
+        assert "did not provide" in window.album_header.artist.toolTip()
+        window.album_header.artist.click()
+        assert window.catalog_future is None
+    finally:
+        window.close()
+
+
+def test_artist_link_error_and_superseded_navigation(app, tmp_path, monkeypatch):
+    from apple_music_player.model import PlayerError
+
+    window = Window(tmp_path / "cache")
+    window.startup_attempted = True
+    monkeypatch.setattr(window.controller, "tick", lambda: None)
+    started, release = threading.Event(), threading.Event()
+    fail = [True]
+
+    def request(endpoint, **params):
+        if params["entity"] == "album":
+            if fail[0]:
+                raise PlayerError("Catalog unavailable")
+            started.set()
+            assert release.wait(3)
+            return [ALBUM]
+        return [ALBUM, SONG]
+
+    monkeypatch.setattr(window.catalog, "request", request)
+
+    def settle():
+        wait_until(lambda: (app.processEvents(), window.tick(), window.catalog_future is None)[2])
+
+    try:
+        window.open_album(Album("br", "101", "Fixture"))
+        settle()
+        window.album_header.artist.click()
+        settle()
+        assert window.catalog_status.text() == "Catalog unavailable"
+        assert window.album_header.artist.isEnabled()  # Retained page permits retry.
+        fail[0] = False
+        window.album_header.artist.click()
+        assert started.wait(2)
+        window.open_album(Album("gb", "101", "New navigation"))
+        release.set()
+        settle()
+        assert window.album_header.album.country == "gb"
+        assert window.album_tracks and window.album_tracks[0].country == "gb"
+        assert not window.controller.queue
     finally:
         release.set()
         window.close()

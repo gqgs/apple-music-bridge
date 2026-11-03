@@ -4,6 +4,7 @@ import re
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import replace
 from pathlib import Path
 
 from PySide6.QtCore import QSize, Qt, QTimer, QUrl
@@ -246,6 +247,7 @@ class Window(QMainWindow):
         )
         layout.addLayout(diagnostics_row)
         self.album_header = AlbumHeader(self.artwork)
+        self.album_header.artist_opened.connect(self.open_artist)
         layout.addWidget(self.album_header)
         self.result_list = QListWidget()
         self.result_list.setItemDelegate(TrackRowDelegate(self.result_list))
@@ -400,6 +402,9 @@ class Window(QMainWindow):
 
     def show_album_header(self):
         album = self.album_tracks[0].album if self.album_tracks else None
+        if album:
+            # Navigation needs the collection's identity, not an inferred track performer.
+            album = replace(album, artist_id=self.album_tracks[0].album_artist_id)
         self.album_header.set_album(album, len(self.album_tracks))
         self.browse_button.setVisible(album is None)
         if album:

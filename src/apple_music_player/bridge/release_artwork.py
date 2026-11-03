@@ -1,6 +1,7 @@
 """Artist release covers: cached reads and bounded, demand-driven catalog enrichment."""
 
 import json
+import math
 import sqlite3
 import threading
 import time
@@ -34,8 +35,10 @@ def safe_reason(reason):
 
 
 class ReleaseUnavailable(CoverUnavailable):
-    def __init__(self, reason):
+    def __init__(self, reason, retry_after=3):
         self.reason = safe_reason(reason)
+        self.retry_after = max(1, min(3600, math.ceil(retry_after)))
+        self.status = 404 if reason == "release-unavailable" else 503
 
 
 class ReleaseArtwork:
@@ -123,8 +126,9 @@ class ReleaseArtwork:
         album = self.selection(artist)
         if album:
             return album
-        if self.retry_after(identifier) > time.time():
-            raise ReleaseUnavailable("release-unavailable")
+        after = self.retry_after(identifier) - time.time()
+        if after > 0:
+            raise ReleaseUnavailable("release-unavailable", after)
         with self.lock:
             if self.stop.is_set():
                 raise ReleaseUnavailable("shutdown")
@@ -134,7 +138,10 @@ class ReleaseArtwork:
             while self.starts and self.starts[0] <= now - 60:
                 self.starts.popleft()
             if len(self.pending) >= 4 or len(self.starts) >= 8:
-                raise ReleaseUnavailable("release-busy")
+                raise ReleaseUnavailable(
+                    "release-busy",
+                    max(3, self.starts[0] + 60 - now) if len(self.starts) >= 8 else 3,
+                )
             self.starts.append(now)
             future = self.pool.submit(self.enrich, identifier, artist)
             self.pending[identifier] = future

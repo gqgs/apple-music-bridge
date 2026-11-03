@@ -18,7 +18,9 @@ COVER = "artist-release:" + ID
 
 
 def ready_album(**kwargs):
-    return replace(ALBUM, artwork_url=URL, store_url="https://music.apple.com/br/album/2", **kwargs)
+    return replace(
+        ALBUM, **(dict(artwork_url=URL, store_url="https://music.apple.com/br/album/2") | kwargs)
+    )
 
 
 def wait_jobs(service):
@@ -223,3 +225,82 @@ def test_failed_lookup_is_bounded_and_invalid_identity_cannot_schedule(bridge):
         service.get(ID)
     assert error.value.reason == "release-unavailable"
     assert len(service.starts) == 1
+
+
+@pytest.mark.parametrize("isolated", [False, True])
+def test_artist_grid_burst_leaves_capacity_for_album_page(bridge, monkeypatch, isolated):
+    """Five client image slots, distinct cold covers, then a navigated album page."""
+    from test_bridge_artwork import image_bytes
+
+    server, _ = bridge
+    entered, release = threading.Event(), threading.Event()
+    server.actor.call(
+        "remember",
+        [replace(ARTIST, id=str(i)) for i in range(1, 6)]
+        + [
+            ready_album(
+                id=str(100 + i), artist_id=str(i), artwork_url=URL.replace("fixture", f"artist{i}")
+            )
+            for i in range(1, 6)
+        ]
+        + [ready_album(id="200", artwork_url=URL.replace("fixture", "album-page"))],
+    )
+    if not isolated:
+        server.covers.background_pool.shutdown()
+        server.covers.background_pool = server.covers.pool
+    loads = []
+    image = image_bytes()
+
+    def slow_artist(url):
+        loads.append(url)
+        if "/artist" in url:
+            entered.set()
+            assert release.wait(3)
+        return image
+
+    monkeypatch.setattr(server.covers, "load", slow_artist)
+    try:
+        with ThreadPoolExecutor(6) as pool:
+            jobs = [
+                pool.submit(raw_cover_response, server, f"artist-release:am:br:lossless:artist:{i}")
+                for i in range(1, 6)
+            ]
+            assert entered.wait(1)
+            deadline = time.monotonic() + 1
+            while len(server.covers.pending) < 2 and time.monotonic() < deadline:
+                threading.Event().wait(0.005)
+            assert len(server.covers.pending) >= 2
+            # Independent client request: no queued artist download may occupy
+            # both direct-album workers. Client-side retry sleeps are separate.
+            album_request = pool.submit(raw_cover_response, server, "am:br:lossless:album:200")
+            if isolated:
+                result = album_request.result(timeout=1)
+                assert result[0] == 200 and not QImage.fromData(result[2]).isNull()
+            else:
+                from concurrent.futures import TimeoutError
+
+                with pytest.raises(TimeoutError):
+                    album_request.result(timeout=0.2)
+            assert len(server.covers.background_pending) <= 2
+            release.set()
+            responses = [job.result(timeout=2) for job in jobs]
+            assert all(response[0] in (200, 503) for response in responses)
+            assert all(
+                response[1]["Retry-After"] == "1" for response in responses if response[0] == 503
+            )
+    finally:
+        release.set()
+    assert any("album-page" in url for url in loads)
+
+
+def test_release_miss_is_not_a_transient_retry_response(bridge):
+    server, _ = bridge
+    server.actor.call("remember", [ARTIST])
+    with server.release_art.connection() as db:
+        db.execute("INSERT INTO bridge_release_checks VALUES (?,?)", (ID, time.time() + 300))
+    status, headers, body = raw_cover_response(server, COVER)
+    assert status == 404
+    assert headers["X-Artwork-Reason"] == "release-unavailable"
+    assert headers.get_all("Cache-Control") == ["no-store"]
+    assert 1 <= int(headers["Retry-After"]) <= 300
+    assert b"<error " in body and not server.release_art.pending

@@ -419,7 +419,9 @@ class Handler(BaseHTTPRequestHandler):
             if method == "getCoverArt" and params.get("id", "").startswith("artist-release:"):
                 identifier = params["id"].removeprefix("artist-release:")
                 album = self.server.release_art.get(identifier)
-                image = self.server.covers.get(album.artwork_url, number(params, "size", 400, 1024))
+                image = self.server.covers.get(
+                    album.artwork_url, number(params, "size", 400, 1024), background=True
+                )
                 self.reply(
                     200,
                     image,
@@ -468,9 +470,9 @@ class Handler(BaseHTTPRequestHandler):
                     }
                 },
                 "xml",
-                status=503,
+                status=getattr(exc, "status", 503),
                 extra={
-                    "Retry-After": "30",
+                    "Retry-After": str(getattr(exc, "retry_after", 30)),
                     "Cache-Control": "no-store",
                     "X-Artwork-Status": "unavailable",
                     "X-Artwork-Reason": reason,

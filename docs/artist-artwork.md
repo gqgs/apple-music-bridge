@@ -23,7 +23,9 @@ it does not guarantee a complete newest-first album response.
 
 Cached metadata and image bytes are reused immediately. A cover request without
 matching metadata schedules a deduplicated background lookup and returns HTTP 503
-with `Cache-Control: no-store` and a sanitized `X-Artwork-Reason`. Search,
+with `Cache-Control: no-store`, `Retry-After`, and a sanitized `X-Artwork-Reason`.
+A cached unavailable result returns HTTP 404/no-store with its remaining suppression
+interval, rather than inviting immediate retries of a known suppressed lookup. Search,
 `getArtists`, and artwork-info requests do not schedule enrichment themselves.
 One worker, at most four pending jobs and eight admissions per minute prevent
 large artist lists from causing hundreds of upstream requests. Catalog calls share
@@ -62,3 +64,28 @@ concurrent search, bounded bursts, exact identity/date selection, shared album
 image-cache reuse, restart persistence, rate-limit sharing and shutdown. Existing
 album image safety tests remain. No real account or media download was used;
 live catalog completeness and the user's client rendering still need retesting.
+
+## Artist-grid versus album-page contention
+
+Artist cover downloads have one separate worker and at most two pending image
+jobs. Direct album/song artwork retains its two workers; total image jobs remain
+bounded at eight and image cache/singleflight keys are shared. Saturated image
+queues request a one-second delayed retry rather than the generic 30-second wait. Cached images do
+not consume either network pool. This prevents unrelated slow artist images from
+occupying both album-page workers. Requests for the same image still share work.
+
+Cold metadata admission remains four jobs/eight starts per minute with the shared
+catalog limiter: this is not a claim that a large cold artist grid fills instantly.
+`release-pending` uses a short Retry-After, while `release-busy` reflects the
+admission window. Clients must release image concurrency slots between delayed
+retries and cancel stale-view work. Retrying 503 four times over seven seconds
+while holding all five client image slots can block album requests before they
+even reach the bridge. A bridge worker fix cannot repair that client queue.
+
+A local comparison used actual main and PR 76647c7 snapshots, identical cached
+metadata, five concurrent artist-cover HTTP requests with deliberately blocked
+image delivery, followed by a direct album-cover request. Main returned in 6ms;
+76647c7 remained blocked beyond 500ms; the isolated-worker change returned in 3ms.
+These are controlled synthetic observations, not live-provider or Supersonic UI
+benchmarks. Regression tests exercise shared versus isolated worker scheduling,
+valid decoded album output, bounded pending jobs, and cached-miss HTTP policy.

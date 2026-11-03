@@ -145,8 +145,18 @@ class Catalog:
 
     def album(self, album_id, country):
         rows = self.request("lookup", id=album_id, country=country, entity="song", limit=200)
+        collection = next(
+            (
+                row
+                for row in rows
+                if isinstance(row, dict)
+                and row.get("wrapperType") == "collection"
+                and str(row.get("collectionId", "")) == album_id
+            ),
+            {},
+        )
         songs = [
-            row
+            {**collection, **row}
             for row in rows
             if isinstance(row, dict)
             and row.get("kind") == "song"

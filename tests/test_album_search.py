@@ -92,7 +92,7 @@ def test_album_ui_open_tracks_queue_and_stale_results(app, tmp_path, monkeypatch
     window.result_list.setCurrentRow(0)
     window.selected_button.click()
     wait_until(lambda: (window.tick(), window.result_list.count() == 2)[1])
-    assert "If You Leave — Daughter" in window.catalog_status.text()
+    assert window.album_header.title.text() == "If You Leave"
     assert window.all_button.text() == "Queue album"
     window.all_button.click()
     assert [entry.track.id for entry in window.controller.queue] == ["12346", "12347"]

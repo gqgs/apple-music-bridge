@@ -489,3 +489,93 @@ def test_one_shared_badge_for_home_search_and_now_playing(app, tmp_path, monkeyp
         )
     finally:
         window.close()
+
+
+def test_album_header_compact_rows_badge_and_search_transition(app, tmp_path, monkeypatch):
+    from PySide6.QtWidgets import QPushButton
+
+    from apple_music_player.browsing import AlbumHeader
+
+    window = Window(tmp_path / "cache")
+    window.startup_attempted = True
+    monkeypatch.setattr(window.controller, "tick", lambda: None)
+    image = decode(png())
+    monkeypatch.setattr(window.artwork, "get", lambda url: image)
+    album = dict(
+        wrapperType="collection",
+        collectionType="Album",
+        collectionId=201,
+        collectionName="Quiet Places",
+        artistName="Fixture artist",
+        artworkUrl100=URL,
+        releaseDate="2026-09-15T00:00:00Z",
+    )
+    songs = [
+        dict(
+            kind="song",
+            trackId=n,
+            collectionId=201,
+            trackName=f"Track {n}",
+            artistName="Fixture artist",
+            trackNumber=n,
+            discNumber=1,
+        )
+        for n in range(1, 11)
+    ]
+    monkeypatch.setattr(
+        window.catalog,
+        "request",
+        lambda endpoint, **kwargs: [album, *songs] if endpoint == "lookup" else [album],
+    )
+    window.show()
+    try:
+        window.open_album(Album("br", "201", "Quiet Places — Fixture artist"))
+        wait_until(
+            lambda: (app.processEvents(), window.tick(), window.play_album_button.isEnabled())[2]
+        )
+        window.resize(1000, 480)
+        window.tick()
+        app.processEvents()
+        assert window.height() == 480
+        assert len(window.findChildren(AlbumHeader)) == 1 and window.album_header.isVisible()
+        assert window.album_header.title.text() == "Quiet Places"
+        assert window.album_header.artist.text() == "Fixture artist"
+        assert window.album_header.details.text() == "2026-09-15 · 10 tracks"
+        assert window.detail_card is None
+        assert window.play_album_button.parent() is window.album_header
+        assert window.all_button.parent() is window.album_header
+        assert window.play_album_button.isEnabled() and window.all_button.isEnabled()
+        for index in range(10):
+            item = window.result_list.item(index)
+            assert item.text() == f"{index + 1:02d}  Track {index + 1}"
+            assert item.icon().isNull()
+            assert window.result_list.visualItemRect(item).height() <= 32
+        window.result_list.setCurrentRow(5)
+        window.refresh_artwork()
+        assert window.detail_card is None and window.result_list.item(5).icon().isNull()
+        assert (
+            len([b for b in window.findChildren(QPushButton, "itunesStoreBadge") if b.isVisible()])
+            == 1
+        )
+        scroll = window.pages.widget(1).verticalScrollBar()
+        assert scroll.maximum() > 0
+        scroll.setValue(scroll.maximum())
+        assert window.pause_button.mapTo(window, window.pause_button.rect().bottomLeft()).y() < 480
+        window.search.setText("another album")
+        window.search_catalog()
+        wait_until(lambda: (app.processEvents(), window.tick(), window.catalog_future is None)[2])
+        assert window.album_header.isHidden() and window.play_album_button.isHidden()
+        assert not window.result_list.item(0).icon().isNull()
+        assert window.all_button.parent() is not window.album_header
+    finally:
+        window.close()
+
+
+def test_album_header_without_artwork_does_not_request_badge(app):
+    from apple_music_player.browsing import AlbumHeader
+
+    artwork = Mock()
+    header = AlbumHeader(artwork)
+    header.set_album(Album("br", "123", "No artwork"), 10)
+    header.refresh()
+    artwork.get.assert_not_called()

@@ -30,7 +30,7 @@ from PySide6.QtWidgets import (
 )
 
 from .artwork import BADGE_URL, Artwork, allowed_url
-from .browsing import AlbumCard, Shelf, placeholder, store_link
+from .browsing import AlbumCard, AlbumHeader, Shelf, placeholder, store_link
 from .cache import Cache
 from .catalog import Catalog, CatalogDeferred, recent_releases
 from .controller import Controller
@@ -211,6 +211,8 @@ class Window(QMainWindow):
         self.catalog_status = QLabel("Search, browse a result's album, or paste a URL below.")
         self.catalog_status.setTextFormat(Qt.PlainText)
         layout.addWidget(self.catalog_status)
+        self.album_header = AlbumHeader(self.artwork)
+        layout.addWidget(self.album_header)
         self.result_list = QListWidget()
         self.result_list.itemDoubleClicked.connect(lambda _: self.add_selected())
         self.result_list.setIconSize(QSize(100, 100))
@@ -220,8 +222,8 @@ class Window(QMainWindow):
         self.detail_host = QVBoxLayout()
         results_row.addLayout(self.detail_host)
         layout.addLayout(results_row, 2)
-        result_buttons = QHBoxLayout()
-        self.button(result_buttons, "Browse album", self.browse_album)
+        result_buttons = self.result_buttons = QHBoxLayout()
+        self.browse_button = self.button(result_buttons, "Browse album", self.browse_album)
         self.selected_button = self.button(result_buttons, "Queue selected", self.add_selected)
         self.play_album_button = self.button(
             result_buttons, "Play album (replace queue)", self.play_album
@@ -334,12 +336,26 @@ class Window(QMainWindow):
             self.detail_host.removeWidget(self.detail_card)
             self.detail_card.deleteLater()
             self.detail_card = None
+        if self.album_header.album:
+            return
         if 0 <= row < len(self.results):
             item = self.results[row]
             album = item if isinstance(item, Album) else item.album
             if album:
                 self.detail_card = AlbumCard(album, self.artwork, self.open_album)
                 self.detail_host.addWidget(self.detail_card)
+
+    def show_album_header(self):
+        album = self.album_tracks[0].album if self.album_tracks else None
+        self.album_header.set_album(album, len(self.album_tracks))
+        self.browse_button.setVisible(album is None)
+        if album:
+            self.album_header.actions.addWidget(self.play_album_button)
+            self.album_header.actions.addWidget(self.all_button)
+        else:
+            self.result_buttons.insertWidget(2, self.play_album_button)
+            self.result_buttons.insertWidget(3, self.all_button)
+        self.play_album_button.setVisible(album is not None)
 
     def open_badge_album(self):
         if self.badge_album:
@@ -350,6 +366,8 @@ class Window(QMainWindow):
         if self.pages.currentIndex() == 0:
             candidates = [card.album for card in self.recent_shelf.cards + self.release_shelf.cards]
         elif self.pages.currentIndex() == 1:
+            if self.album_header.album:
+                candidates.append(self.album_header.album)
             if self.detail_card:
                 candidates.append(self.detail_card.album)
             candidates.extend(
@@ -369,9 +387,13 @@ class Window(QMainWindow):
             self.recent_shelf.refresh()
             self.release_shelf.refresh()
         elif self.pages.currentIndex() == 1:
+            if self.album_header.album:
+                self.album_header.refresh()
             if self.detail_card:
                 self.detail_card.refresh()
-            if badge_ready:
+            if self.album_header.album:
+                pass  # Album track rows deliberately have no repeated cover artwork.
+            elif badge_ready:
                 for index, item in enumerate(self.results):
                     image = self.artwork.get(item.artwork_url)
                     if not image.isNull() and index < self.result_list.count():
@@ -509,6 +531,7 @@ class Window(QMainWindow):
             self.catalog_future = None
         if clear:
             self.results = []
+            self.show_album_header()
             self.result_list.clear()
             self.selected_button.setEnabled(False)
             self.all_button.setEnabled(False)
@@ -750,10 +773,22 @@ class Window(QMainWindow):
                             else ()
                         )
                         self.play_album_button.setEnabled(bool(self.album_tracks))
+                        self.show_album_header()
                         self.result_list.clear()
-                        self.result_list.addItems([track.title for track in self.results])
-                        for index in range(self.result_list.count()):
-                            self.result_list.item(index).setIcon(placeholder())
+                        if self.album_header.album:
+                            self.result_list.addItems(
+                                [
+                                    f"{index + 1:02d}  "
+                                    + track.title.removesuffix(" — " + track.artist)
+                                    for index, track in enumerate(self.results)
+                                ]
+                            )
+                            for index in range(self.result_list.count()):
+                                self.result_list.item(index).setSizeHint(QSize(0, 30))
+                        else:
+                            self.result_list.addItems([track.title for track in self.results])
+                            for index in range(self.result_list.count()):
+                                self.result_list.item(index).setIcon(placeholder())
                         if self.results:
                             self.result_list.setCurrentRow(0)
                         albums = self.pending_result_kind == "albums"
@@ -767,9 +802,14 @@ class Window(QMainWindow):
                         if len(self.results) == 1:
                             label = label[:-1]
                         action = "open album" if albums else "queue"
-                        context = self.pending_album_title
+                        context = "" if self.album_header.album else self.pending_album_title
                         self.catalog_status.setText(
-                            f"{context + ' · ' if context else ''}{len(self.results)} {label} · "
+                            (
+                                ""
+                                if self.album_header.album
+                                else f"{context + ' · ' if context else ''}"
+                                + f"{len(self.results)} {label} · "
+                            )
                             + (
                                 f"double-click to {action}"
                                 if self.results
@@ -827,6 +867,7 @@ class Window(QMainWindow):
             self.rendered_queue = rows
         self.usage.setText(f"Cache {self.cache.usage / GIB:.2f} / {self.cache.limit / GIB:g} GiB")
         self.status.setText(c.error)
+        self.status.setVisible(bool(c.error))
         self.now.setText(c.current.track.title if c.current else "Nothing playing")
         album = c.current.track.album if c.current else None
         if album != self.now_album:
@@ -844,6 +885,8 @@ class Window(QMainWindow):
         )
         self.output_label.setText(c.player.output_label if c.current else "")
         self.fallback.setText(c.media.warning(c.current.quality) if c.current and c.media else "")
+        self.output_label.setVisible(bool(self.output_label.text()))
+        self.fallback.setVisible(bool(self.fallback.text()))
         self.pause_button.setEnabled(bool(c.current and c.player.output_verified))
         self.seek.setEnabled(bool(c.current and c.player.output_verified))
         position = c.player.properties.get("time-pos") or 0 if c.current else 0

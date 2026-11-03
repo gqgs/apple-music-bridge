@@ -89,6 +89,65 @@ class AlbumCard(QFrame):
             self.cover.setIcon(QIcon(QPixmap.fromImage(image)))
 
 
+class AlbumHeader(QWidget):
+    """One album identity above its compact track list; no per-track artwork."""
+
+    def __init__(self, artwork):
+        super().__init__()
+        self.artwork, self.album = artwork, None
+        row = QHBoxLayout(self)
+        self.cover = QLabel()
+        self.cover.setFixedSize(100, 100)
+        self.cover.setPixmap(placeholder().pixmap(100, 100))
+        row.addWidget(self.cover, 0, Qt.AlignTop)
+        text = QVBoxLayout()
+        self.title = QLabel()
+        self.title.setTextFormat(Qt.PlainText)
+        self.title.setWordWrap(True)
+        self.title.setStyleSheet("font-size: 20px; font-weight: 600")
+        self.artist = QLabel()
+        self.artist.setTextFormat(Qt.PlainText)
+        self.details = QLabel()
+        self.details.setTextFormat(Qt.PlainText)
+        text.addWidget(self.title)
+        text.addWidget(self.artist)
+        text.addWidget(self.details)
+        self.actions = QHBoxLayout()
+        text.addLayout(self.actions)
+        self.store = QPushButton("View album in iTunes")
+        self.store.clicked.connect(
+            lambda: QDesktopServices.openUrl(QUrl(store_link(self.album))) if self.album else None
+        )
+        text.addWidget(self.store, 0, Qt.AlignLeft)
+        row.addLayout(text, 1)
+        self.hide()
+
+    def set_album(self, album, count):
+        self.album = album
+        self.setVisible(album is not None)
+        if album:
+            self.title.setText(album.album_title or album.title.removesuffix(" — " + album.artist))
+            self.artist.setText(album.artist)
+            self.details.setText(
+                " · ".join(x for x in (album.release_date[:10], f"{count} tracks") if x)
+            )
+            self.cover.setPixmap(placeholder().pixmap(100, 100))
+
+    def refresh(self):
+        if not self.album or not allowed_url(self.album.artwork_url):
+            return
+        if self.artwork.get(BADGE_URL).isNull():
+            self.cover.setPixmap(placeholder().pixmap(100, 100))
+            return
+        image = self.artwork.get(self.album.artwork_url)
+        if not image.isNull():
+            self.cover.setPixmap(
+                QPixmap.fromImage(image).scaled(
+                    100, 100, Qt.KeepAspectRatio, Qt.SmoothTransformation
+                )
+            )
+
+
 class Shelf(QWidget):
     def __init__(self, artwork, opened):
         super().__init__()

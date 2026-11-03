@@ -46,12 +46,10 @@ class Core:
         downloader_factory=None,
         runtime_root=None,
         cancel=None,
-        artist_images=False,
     ):
         if not re.fullmatch(r"[a-z]{2}", country) or quality not in {"lossless", "atmos"}:
             raise ValueError("Invalid storefront or quality")
         self.country, self.quality = country, quality
-        self.artist_images = artist_images
         self.cancel = cancel or threading.Event()
         self.cache = Cache(root, limit)
         self.catalog = catalog or Catalog()
@@ -62,6 +60,14 @@ class Core:
         self._counts = None
         self.cache.db.execute(
             "CREATE TABLE IF NOT EXISTS bridge_metadata (id TEXT PRIMARY KEY, data TEXT)"
+        )
+        self.cache.db.execute(
+            "CREATE INDEX IF NOT EXISTS bridge_artist_art_idx "
+            "ON bridge_metadata(json_extract(data, '$.artist_id'))"
+        )
+        self.cache.db.execute(
+            "CREATE TABLE IF NOT EXISTS bridge_release_checks "
+            "(id TEXT PRIMARY KEY, retry_after REAL NOT NULL)"
         )
         self.cache.db.commit()
         try:
@@ -251,10 +257,8 @@ class Core:
     def describe(self, item):
         result = {"id": self.identity(item), "name": item.title}
         if isinstance(item, Artist):
-            # Public artist search supplies neither a discography count nor a
-            # verified portrait. Optional fields stay absent, not cache-derived.
-            if self.artist_images:
-                result["coverArt"] = "artist-image:" + self.identity(item)
+            # An artwork resolver ID, not a claim of a portrait or complete discography.
+            result["coverArt"] = "artist-release:" + self.identity(item)
             return result
         result["coverArt"] = self.identity(item)
         result.update(
@@ -399,6 +403,7 @@ class Actor:
     def __init__(self, factory):
         self.cancel = threading.Event()
         self.metrics = Metrics()
+        self.last_metadata = 0.0
         self.pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="bridge-core")
         self.metadata_pending = threading.BoundedSemaphore(4)
         future = self.pool.submit(factory, self.cancel)
@@ -470,6 +475,7 @@ class Actor:
         return self.pool.submit(getattr(self.core, method), *args, **kwargs).result()
 
     def metadata(self, method, params, timeout=12):
+        self.last_metadata = time.monotonic()
         if method != "search3":
             return self._metadata(method, params, timeout)
         # HTTP authentication precedes this call. Preserve user/API-key and client

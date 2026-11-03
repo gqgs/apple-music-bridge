@@ -641,15 +641,20 @@ def test_artist_search_count_and_portrait_are_unknown_despite_cached_albums(brid
     server.actor.call("remember", [ARTIST, ALBUM, replace(ALBUM, id="99")])
     params = {"query": "fixture", "artistCount": "50", "albumCount": "0", "songCount": "0"}
     artist = payload(server, "search3", params)["searchResult3"]["artist"][0]
-    assert artist == {"id": "am:br:lossless:artist:1", "name": ARTIST.title}
+    assert artist == {
+        "id": "am:br:lossless:artist:1",
+        "name": ARTIST.title,
+        "coverArt": "artist-release:am:br:lossless:artist:1",
+    }
     status, _, body = request(server, "search3", dict(params, f="xml"))
     assert status == 200
     node = ET.fromstring(body).find(".//{http://subsonic.org/restapi}artist")
     assert node is not None
-    assert "albumCount" not in node.attrib and "coverArt" not in node.attrib
+    assert "albumCount" not in node.attrib
+    assert node.attrib["coverArt"].startswith("artist-release:")
     # Detail count describes this returned collection, not remembered albums or a
     # claim that the limited public lookup is a complete subscription discography.
     detail = payload(server, "getArtist", {"id": artist["id"]})["artist"]
     assert detail["albumCount"] == len(detail["album"]) == 1
-    assert "coverArt" not in detail and "artistImageUrl" not in detail
+    assert detail["coverArt"].startswith("artist-release:") and "artistImageUrl" not in detail
     assert payload(server, "search3", params)["searchResult3"]["artist"][0] == artist

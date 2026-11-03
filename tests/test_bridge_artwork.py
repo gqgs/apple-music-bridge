@@ -432,25 +432,11 @@ def test_album_success_has_one_cache_policy_and_needs_no_client_retry(bridge, mo
     assert len(calls) == 1
 
 
-@pytest.mark.parametrize("portrait", [False, True])
-def test_cover_failure_has_one_no_store_policy(bridge, monkeypatch, tmp_path, portrait):
-    from apple_music_player.bridge.artist_images import ArtistImages, ResolutionFailure
-
+def test_cover_failure_has_one_no_store_policy(bridge, monkeypatch):
     server, _ = bridge
-    server.actor.call("remember", [ARTIST, replace(ALBUM, artwork_url=URL)])
-    if portrait:
-        server.actor.core.artist_images = True
-        server.artist_images = ArtistImages(tmp_path / "portraits")
-
-        def fail(*args):
-            raise ResolutionFailure("musicbrainz-network")
-
-        monkeypatch.setattr("apple_music_player.bridge.artist_images.resolve", fail)
-        identifier = "artist-image:am:br:lossless:artist:1"
-    else:
-        transport(monkeypatch, b"invalid image")
-        identifier = "am:br:lossless:album:2"
-    status, headers, body = raw_cover_response(server, identifier)
+    server.actor.call("remember", [replace(ALBUM, artwork_url=URL)])
+    transport(monkeypatch, b"invalid image")
+    status, headers, body = raw_cover_response(server, "am:br:lossless:album:2")
     assert status == 503
     assert headers.get_all("Cache-Control") == ["no-store"]
     assert headers.get_content_type() == "application/xml" and b"<error " in body

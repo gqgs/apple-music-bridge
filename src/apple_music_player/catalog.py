@@ -2,6 +2,7 @@
 
 import json
 import re
+import threading
 import time
 from datetime import date, timedelta
 from email.utils import parsedate_to_datetime
@@ -58,23 +59,46 @@ def public_result(row):
     }
 
 
-class Catalog:
+class CatalogLimiter:
     def __init__(self):
+        self.lock = threading.Lock()
         self.last_request = 0.0
+        self.not_before = 0.0
+
+
+class Catalog:
+    def __init__(self, limiter=None):
+        self.limiter = limiter or CatalogLimiter()
         self.responses = {}
         self.response_times = {}
-        self.not_before = 0.0
         self.last_response_source = None
+
+    @property
+    def last_request(self):
+        return self.limiter.last_request
+
+    @last_request.setter
+    def last_request(self, value):
+        self.limiter.last_request = value
+
+    @property
+    def not_before(self):
+        return self.limiter.not_before
+
+    @not_before.setter
+    def not_before(self, value):
+        self.limiter.not_before = value
 
     def request(self, endpoint, **params):
         key = endpoint + "?" + urlencode(params)
         if key in self.responses and time.monotonic() - self.response_times.get(key, 0) < 3600:
             self.last_response_source = (key, "memory cache")
             return self.responses[key]
-        delay = max(self.last_request + 3, self.not_before) - time.monotonic()
-        if delay > 0:
-            raise CatalogDeferred(delay)
-        self.last_request = time.monotonic()
+        with self.limiter.lock:
+            delay = max(self.last_request + 3, self.not_before) - time.monotonic()
+            if delay > 0:
+                raise CatalogDeferred(delay)
+            self.last_request = time.monotonic()
         try:
             with urlopen("https://itunes.apple.com/" + key, timeout=15) as response:
                 payload = response.read(2_000_001)
@@ -96,7 +120,8 @@ class Catalog:
                 except (ValueError, TypeError, OverflowError):
                     pass
                 delay = max(3.0, delay)
-                self.not_before = time.monotonic() + delay
+                with self.limiter.lock:
+                    self.not_before = max(self.not_before, time.monotonic() + delay)
                 exc.close()
                 raise CatalogDeferred(delay, rate_limited=True) from None
             exc.close()

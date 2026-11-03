@@ -11,15 +11,14 @@ import struct
 import threading
 import xml.etree.ElementTree as ET
 import zlib
-from html import escape
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
 from ..model import PlayerError
-from .artist_images import ArtistImages, ResolutionFailure, safe_reason
 from .artwork import Covers, CoverUnavailable
 from .core import BridgeError, Core
+from .release_artwork import ReleaseArtwork, safe_reason
 
 EXTENSIONS = [
     {"name": "apiKeyAuthentication", "versions": [1]},
@@ -413,31 +412,22 @@ class Handler(BaseHTTPRequestHandler):
                 )
                 return
             if method == "getArtistArtworkInfo":
-                if not self.server.artist_images:
-                    self.api_response({"artistArtworkInfo": {"status": "disabled"}}, fmt)
-                else:
-                    artist = self.server.actor.core.cached_artist(params.get("id", ""))
-                    self.api_response(
-                        {"artistArtworkInfo": self.server.artist_images.info(artist)}, fmt
-                    )
+                self.api_response(
+                    {"artistArtworkInfo": self.server.release_art.info(params.get("id", ""))}, fmt
+                )
                 return
-            if method == "getCoverArt" and params.get("id", "").startswith("artist-image:"):
-                if not self.server.artist_images:
-                    raise BridgeError(70, "Artist images are disabled")
-                identifier = params["id"].removeprefix("artist-image:")
-                artist = self.server.actor.core.cached_artist(identifier)
-                image, credits = self.server.artist_images.get(artist)
-                if not image:
-                    # Clients may persist successful placeholders despite no-store.
-                    raise ResolutionFailure(credits.get("reason", "image-unavailable"))
+            if method == "getCoverArt" and params.get("id", "").startswith("artist-release:"):
+                identifier = params["id"].removeprefix("artist-release:")
+                album = self.server.release_art.get(identifier)
+                image = self.server.covers.get(album.artwork_url, number(params, "size", 400, 1024))
                 self.reply(
                     200,
-                    image or placeholder(),
+                    image,
                     "image/png",
                     {
-                        "X-Artwork-Status": "available" if image else "placeholder",
-                        "X-Artwork-Kind": "artist-image" if image else "unavailable",
-                        "Cache-Control": "private, max-age=86400" if image else "no-store",
+                        "X-Artwork-Status": "available",
+                        "X-Artwork-Kind": "release-artwork",
+                        "Cache-Control": "private, max-age=3600",
                     },
                 )
                 return
@@ -466,29 +456,6 @@ class Handler(BaseHTTPRequestHandler):
                     },
                 )
                 return
-            if (
-                method == "getArtistInfo2"
-                and self.server.artist_images
-                and params.get("id", "").split(":")[-2:-1] == ["artist"]
-            ):
-                artist = self.server.actor.core.cached_artist(params["id"])
-                info = self.server.artist_images.info(artist)
-                if info["status"] == "ready":
-                    credit = info["credits"]
-                    payload["artistInfo2"]["biography"] = (
-                        "Artist image credit (not a biography): "
-                        + escape(credit["creator"])
-                        + ' — <a href="'
-                        + escape(credit["sourceUrl"], quote=True)
-                        + '">Wikimedia Commons</a> — <a href="'
-                        + escape(credit["licenseUrl"], quote=True)
-                        + '">'
-                        + escape(credit["license"])
-                        + "</a>. "
-                        + escape(credit["changes"])
-                        + ". "
-                        + escape(credit["credit"])
-                    )
             self.api_response(payload, fmt)
         except CoverUnavailable as exc:
             reason = safe_reason(getattr(exc, "reason", "lookup-failed"))
@@ -557,23 +524,17 @@ class Server(ThreadingHTTPServer):
         self.metadata_slots = threading.BoundedSemaphore(4)
         self.metrics = actor.metrics
         self.covers = Covers(actor.core.cache.root / "artwork", self.metrics)
-        self.artist_images = (
-            ArtistImages(actor.core.cache.root / "artist-images")
-            if actor.core.artist_images
-            else None
-        )
+        self.release_art = ReleaseArtwork(actor)
         try:
             super().__init__(("127.0.0.1", port), Handler)
         except Exception:
             self.covers.close()
-            if self.artist_images:
-                self.artist_images.close()
+            self.release_art.close()
             raise
         self.hosts = {f"127.0.0.1:{self.server_port}", f"localhost:{self.server_port}"}
 
     def server_close(self):
-        if self.artist_images:
-            self.artist_images.close()
+        self.release_art.close()
         self.covers.close()
         super().server_close()
 

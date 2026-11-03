@@ -152,9 +152,11 @@ is a square numeric size followed by `bb.jpg`, `bb.jpeg`, `bb.png` or `bb.webp` 
 eligible. Query-bearing URLs and unknown shapes are never rewritten. The host,
 asset path and format suffix remain unchanged. There is no assumed format negotiation.
 
-The client `size` parameter defaults to 512; values up to 4096 are accepted and
+The client `size` parameter defaults to 400; values up to 4096 are accepted and
 capped at 1024 (zero uses the default). Requests above the source's named size try
-one of four buckets: 128, 256, 512 or 1024 pixels. A failed, corrupt or unsupported
+one of five buckets: 128, 256, 400, 512 or 1024 pixels. The user-requested
+400×400 substitution is the default; a client explicitly asking for 400 also gets
+a 400×400 URL rather than a larger bucket. A failed, corrupt or unsupported
 variant falls back to the original URL within the same waiting budget; if the
 variant consumes the budget, this request returns a placeholder, and a subsequent
 request can use the fallback while the failed variant is cooling down. Valid

@@ -403,7 +403,7 @@ class Handler(BaseHTTPRequestHandler):
                 else self.server.actor.call("dispatch", method, params)
             )
             if method == "getCoverArt":
-                image = self.server.covers.get(payload, number(params, "size", 512, 4096))
+                image = self.server.covers.get(payload, number(params, "size", 400, 4096))
                 self.reply(
                     200,
                     image or placeholder(),

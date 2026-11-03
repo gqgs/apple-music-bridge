@@ -256,7 +256,7 @@ def test_bad_variant_falls_back_to_original_and_is_not_retried(tmp_path, monkeyp
     try:
         assert QImage.fromData(covers.get(URL)).width() == 100  # Never upscale fallback.
         assert QImage.fromData(covers.get(URL)).width() == 100
-        assert calls == [URL.replace("100x100", "512x512"), URL]
+        assert calls == [URL.replace("100x100", "400x400"), URL]
     finally:
         covers.close()
 
@@ -282,7 +282,7 @@ def test_http_requested_cover_size(bridge, monkeypatch):
     calls = transport(monkeypatch, image_bytes(width=512))
     response = request(server, "getCoverArt", {"id": "am:br:lossless:album:2", "size": "400"})
     assert QImage.fromData(response[2]).width() == 400
-    assert calls == [(URL.replace("100x100", "512x512"), 8)]
+    assert calls == [(URL.replace("100x100", "400x400"), 8)]
     assert (
         payload(server, "getCoverArt", {"id": "am:br:lossless:album:2", "size": "-1"})["status"]
         == "failed"

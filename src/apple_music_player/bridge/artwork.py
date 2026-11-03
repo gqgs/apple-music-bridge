@@ -20,7 +20,7 @@ def sized_url(url, size):
     match = re.fullmatch(r"(.*/)([1-9][0-9]{0,3})x\2(bb\.(?:jpg|jpeg|png|webp))", parts.path)
     if parts.query or not parts.path.startswith("/image/thumb/") or not match:
         return url
-    bucket = next(n for n in (128, 256, 512, 1024) if n >= size)
+    bucket = next(n for n in (128, 256, 400, 512, 1024) if n >= size)
     if int(match[2]) >= size:
         return url
     return urlunsplit(parts._replace(path=f"{match[1]}{bucket}x{bucket}{match[3]}"))
@@ -67,12 +67,12 @@ class Covers:
                 retry = time.monotonic() + 30 if reason in {"network", "server"} else float("inf")
                 self.failures[url] = (attempts, retry)
 
-    def get(self, url, size=512):
+    def get(self, url, size=400):
         # Leave HTTP capacity for ping, browsing and streaming during art stalls.
         if not self.waiters.acquire(blocking=False):
             return b""
         try:
-            size = max(1, min(1024, int(size) or 512))
+            size = max(1, min(1024, int(size) or 400))
             deadline = time.monotonic() + 20
             candidate = sized_url(url, size)
             data = self._get(candidate, deadline)

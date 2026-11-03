@@ -346,7 +346,8 @@ def test_failures_are_not_successful_images_and_diagnostics_are_sanitized(bridge
     server.actor.call("remember", [replace(ALBUM, artwork_url=URL)])
     response = request(server, "getCoverArt", {"id": "am:br:lossless:album:2"})
     assert response[0] == 503 and response[1]["Cache-Control"] == "no-store"
-    assert not response[2]  # Supersonic cannot decode/cache a successful placeholder.
+    assert response[1]["Content-Type"].startswith("application/xml")
+    assert b"<error " in response[2]  # go-subsonic parses XML instead of decoding an image.
     diagnostics = payload(server, "getBridgeDiagnostics")
     assert diagnostics["status"] == "ok" and diagnostics["bridgeDiagnostics"]["metric"]
     text = str(diagnostics)
@@ -390,7 +391,7 @@ def test_busy_metadata_is_not_a_successful_placeholder(bridge):
         connection.execute("BEGIN EXCLUSIVE")
         response = request(server, "getCoverArt", {"id": "am:br:lossless:album:2"})
         assert response[1]["Content-Type"] != "image/png"
-        assert b'"status": "failed"' in response[2]
+        assert b'status="failed"' in response[2]
     finally:
         connection.rollback()
         connection.close()

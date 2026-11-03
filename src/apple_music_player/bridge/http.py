@@ -17,7 +17,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
 from ..model import PlayerError
-from .artist_images import ArtistImages
+from .artist_images import ArtistImages, ResolutionFailure, safe_reason
 from .artwork import Covers, CoverUnavailable
 from .core import BridgeError, Core
 
@@ -390,6 +390,8 @@ class Handler(BaseHTTPRequestHandler):
             if fmt not in {"xml", "json"}:
                 raise BridgeError(10, "Only XML and JSON are supported")
             method = match[1]
+            if method == "getCoverArt":
+                fmt = "xml"
             # Static extension discovery is the sole public endpoint; no catalog data.
             if method != "getOpenSubsonicExtensions":
                 authenticate(params, self.server.credentials)
@@ -420,6 +422,9 @@ class Handler(BaseHTTPRequestHandler):
                 identifier = params["id"].removeprefix("artist-image:")
                 artist = self.server.actor.core.cached_artist(identifier)
                 image, credits = self.server.artist_images.get(artist)
+                if not image:
+                    # Clients may persist successful placeholders despite no-store.
+                    raise ResolutionFailure(credits.get("reason", "image-unavailable"))
                 self.reply(
                     200,
                     image or placeholder(),
@@ -480,13 +485,23 @@ class Handler(BaseHTTPRequestHandler):
                         + escape(credit["credit"])
                     )
             self.api_response(payload, fmt)
-        except CoverUnavailable:
-            self.reply(
-                503,
+        except CoverUnavailable as exc:
+            reason = safe_reason(getattr(exc, "reason", "lookup-failed"))
+            # go-subsonic recognizes XML errors; empty/JSON bodies are decoded as images.
+            self.api_response(
+                {
+                    "error": {
+                        "code": 0,
+                        "message": "Artwork temporarily unavailable [" + reason + "]; retry later",
+                    }
+                },
+                "xml",
+                status=503,
                 extra={
                     "Retry-After": "30",
                     "Cache-Control": "no-store",
                     "X-Artwork-Status": "unavailable",
+                    "X-Artwork-Reason": reason,
                 },
             )
         except BridgeError as exc:
@@ -504,7 +519,7 @@ class Handler(BaseHTTPRequestHandler):
         except Exception:
             self.api_response({"error": {"code": 0, "message": "Bridge operation failed"}}, fmt)
 
-    def api_response(self, data, fmt):
+    def api_response(self, data, fmt, status=200, extra=None):
         payload = {
             "status": "failed" if "error" in data else "ok",
             "version": "1.16.1",
@@ -514,7 +529,7 @@ class Handler(BaseHTTPRequestHandler):
             **data,
         }
         body, mime = encoded_response(payload, fmt)
-        self.reply(200, body, mime)
+        self.reply(status, body, mime, extra)
 
     def do_GET(self):
         try:

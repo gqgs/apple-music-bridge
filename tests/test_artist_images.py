@@ -189,7 +189,7 @@ def test_negative_cache_and_expiry(tmp_path, monkeypatch, failure, status):
     try:
         for _ in range(2):
             if failure is mod.Missing:
-                assert service.get(ARTIST) == (b"", {})
+                assert service.get(ARTIST) == (b"", {"reason": "image-unavailable"})
             else:
                 with pytest.raises(CoverUnavailable):
                     service.get(ARTIST)
@@ -244,7 +244,7 @@ def test_fetch_headers_caps_mime_and_retry_after(monkeypatch):
             return Response(b"x" * (256 * 1024 + 1))
 
     monkeypatch.setattr(mod, "build_opener", lambda *_: Opener())
-    with pytest.raises(ValueError):
+    with pytest.raises(mod.ResolutionFailure, match="musicbrainz-invalid"):
         mod.fetch(Response.url, threading.Event())
     assert "github.com/gqgs/apple-music-player" in seen[0].get_header("User-agent")
     assert seen[0].get_header("Authorization") is None
@@ -426,3 +426,81 @@ def test_shutdown_interrupts_running_and_cancels_queued_lookup(tmp_path, monkeyp
         assert calls == [ARTIST.id]
     finally:
         service.close()
+
+
+@pytest.mark.parametrize(
+    "failure,reason",
+    [
+        (mod.ResolutionFailure("musicbrainz-http-503"), "musicbrainz-http-503"),
+        (mod.Missing("identity-missing"), "identity-missing"),
+        (ValueError("SECRET raw body"), "invalid-response"),
+    ],
+)
+def test_artist_failure_is_xml_not_cached_placeholder(
+    bridge, monkeypatch, tmp_path, failure, reason
+):
+    import xml.etree.ElementTree as ET
+
+    server, _ = bridge
+    server.actor.core.artist_images = True
+    server.artist_images = mod.ArtistImages(tmp_path / "images")
+    server.actor.call("remember", [ARTIST])
+    calls = []
+
+    def resolve(*args):
+        calls.append(1)
+        raise failure
+
+    monkeypatch.setattr(mod, "resolve", resolve)
+    for _ in range(2):
+        status, headers, body = request(
+            server, "getCoverArt", {"id": "artist-image:am:br:lossless:artist:1"}
+        )
+        assert status == 503
+        assert headers["Content-Type"].startswith("application/xml")
+        assert headers["Cache-Control"] == "no-store"
+        assert headers["X-Artwork-Reason"] == reason
+        error = ET.fromstring(body).find("{http://subsonic.org/restapi}error")
+        assert reason in error.attrib["message"]
+        assert b"SECRET" not in body
+    assert len(calls) == 1
+    info = payload(server, "getArtistArtworkInfo", {"id": "am:br:lossless:artist:1"})
+    assert info["artistArtworkInfo"]["reason"] == reason
+
+
+def test_provider_network_reason_does_not_expose_exception(monkeypatch):
+    from urllib.error import URLError
+
+    monkeypatch.setattr(mod, "MB_GATE", mod.Gate())
+
+    class Opener:
+        def open(self, *args, **kwargs):
+            raise URLError("SECRET proxy configuration")
+
+    monkeypatch.setattr(mod, "build_opener", lambda *_: Opener())
+    with pytest.raises(mod.ResolutionFailure, match="^musicbrainz-network$"):
+        mod.fetch("https://musicbrainz.org/ws/2/url?fmt=json", threading.Event())
+
+
+@pytest.mark.parametrize("wiki", [False, True])
+def test_http_full_provider_pipeline_returns_decodable_png(bridge, monkeypatch, tmp_path, wiki):
+    from PySide6.QtGui import QImage
+
+    server, _ = bridge
+    server.actor.core.artist_images = True
+    server.artist_images = mod.ArtistImages(tmp_path / "images")
+    server.actor.call("remember", [ARTIST])
+    calls = provider(monkeypatch, wiki=wiki)
+    result = request(server, "getCoverArt", {"id": "artist-image:am:br:lossless:artist:1"})
+    assert result[0] == 200 and result[1]["Content-Type"] == "image/png"
+    assert not QImage.fromData(result[2]).isNull()
+    assert len(calls) == (5 if wiki else 4)
+    info = payload(server, "getArtistArtworkInfo", {"id": "am:br:lossless:artist:1"})
+    assert info["artistArtworkInfo"]["status"] == "ready"
+
+
+def test_missing_direct_image_credits_reason_is_preserved(monkeypatch):
+    provider(monkeypatch, license_missing=True)
+    with pytest.raises(mod.Missing) as error:
+        mod.resolve(ARTIST, threading.Event())
+    assert error.value.reason == "attribution-unavailable"

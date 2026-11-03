@@ -10,8 +10,9 @@ Search returns artist cards immediately. The opt-in cover ID starts with
 An image may arrive later, be unavailable, or need another client request after a
 503. The bridge does not promise an automatic refresh in every Subsonic client.
 It never turns a transient failure into a cacheable successful placeholder.
-A confirmed missing mapping/image gets the neutral placeholder, not an invented
-portrait, logo, or unrelated album cover.
+A confirmed missing mapping/image returns a non-cacheable error, not a successful
+placeholder: some clients persist decoded placeholders regardless of `no-store`.
+The client can display its own neutral fallback.
 
 ## Identity and source selection
 
@@ -61,7 +62,7 @@ After a successful cover request, fetch authenticated
 ```
 
 This example is synthetic. Other statuses are `disabled`, `pending`, `unavailable`
-and `retry`. The endpoint is cache-only: it never starts or waits for network work.
+and `retry`. Failed/missing results include a sanitized `reason`. The endpoint is cache-only: it never starts or waits for network work.
 Display creator, supplied credit, license/link, source/link and changes in a visible
 image-info affordance; all text is plain text, not trusted HTML. Do not imply that
 Wikidata's data license licenses the image. Cached credits also appear as explicitly
@@ -118,3 +119,29 @@ search while image work is blocked. Documentation and Björk's public MusicBrain
 Apple link were source-checked; no complete live image resolution or Supersonic
 credit-display validation is claimed. Review per-image credits; this is not a blanket
 permission statement about all Commons images.
+
+## Troubleshooting artist image requests
+
+`getCoverArt` errors use XML even when `f=json` is requested: Supersonic's
+Go client recognizes XML errors but attempts image decoding for other content.
+Unavailable images return HTTP 503, `Cache-Control: no-store`, `Retry-After: 30`
+and `X-Artwork-Reason`. No successful placeholder is returned for opt-in artist
+images, including confirmed misses. Existing client-cached placeholders are not
+remotely invalidated by this change.
+
+Reasons include `identity-missing`, `identity-ambiguous`, `attribution-unavailable`,
+`musicbrainz-http-503`, `musicbrainz-network`, provider `-cooldown`/`-invalid`,
+`lookup-pending`, `lookup-expired`, and `queue-full`. These are fixed categories;
+provider bodies, URLs and exception text are never exposed. Old cached failures
+without a reason show `cached-retry` until their existing five-minute expiry.
+Share only the bracketed reason when reporting a failure, not request URLs or
+credentials. A network reason does not distinguish DNS, proxy, TLS or connection
+failure; it is not evidence of an authentication problem.
+
+The client needs bounded delayed retries for transient failures: the first response
+can time out while background work continues and later populates the cache. It
+should stop retrying when leaving the view, avoid caching error responses, and
+respect Retry-After. The bridge does not implement client retries. Missing matches
+remain negatively cached for a day; repeatedly requesting them does not query the
+provider again. Live provider resolution remains unverified in this environment:
+a MusicBrainz API attempt was blocked by the environment proxy (tunnel HTTP 403).

@@ -12,7 +12,7 @@ from concurrent.futures import CancelledError, ThreadPoolExecutor, TimeoutError
 from email.utils import parsedate_to_datetime
 from hashlib import sha256
 from html.parser import HTMLParser
-from urllib.error import HTTPError
+from urllib.error import HTTPError, URLError
 from urllib.parse import unquote, urlencode, urlsplit
 from urllib.request import Request, build_opener
 
@@ -27,7 +27,42 @@ RECORD_LIMIT = 3 * 1024**2
 
 
 class Missing(Exception):
-    pass
+    def __init__(self, reason="image-unavailable"):
+        self.reason = reason
+
+
+class ResolutionFailure(CoverUnavailable):
+    def __init__(self, reason):
+        self.reason = safe_reason(reason)
+        super().__init__(self.reason)
+
+
+def safe_reason(reason):
+    # Only application-owned categories, never provider bodies, URLs or exception text.
+    if isinstance(reason, str) and (
+        reason
+        in {
+            "image-unavailable",
+            "identity-missing",
+            "identity-ambiguous",
+            "attribution-unavailable",
+            "wikidata-missing",
+            "wikidata-ambiguous",
+            "invalid-response",
+            "lookup-failed",
+            "lookup-expired",
+            "lookup-pending",
+            "queue-full",
+            "shutdown",
+            "cached-retry",
+        }
+        or re.fullmatch(
+            r"(?:musicbrainz|wikidata|commons|image)-(?:network|invalid|cooldown|http-[1-5][0-9]{2})",
+            reason,
+        )
+    ):
+        return reason
+    return "lookup-failed"
 
 
 def valid_id(value):
@@ -144,7 +179,7 @@ def provenance(info, mbid, origin):
         or license_url.rstrip("/") != expected.rstrip("/")
         or not file_title(source)
     ):
-        raise Missing()
+        raise Missing("attribution-unavailable")
     return dict(
         creator=creator,
         license=license_name,
@@ -251,7 +286,15 @@ def fetch(url, stop, *, image=False):
     ):
         raise ValueError("Unsafe metadata URL")
     gate = MB_GATE if host == "musicbrainz.org" else WIKI_GATE
-    gate.enter(stop)
+    provider = {
+        "musicbrainz.org": "musicbrainz",
+        "www.wikidata.org": "wikidata",
+        "commons.wikimedia.org": "commons",
+    }.get(host, "image")
+    try:
+        gate.enter(stop)
+    except CoverUnavailable:
+        raise ResolutionFailure(provider + "-cooldown") from None
     cap = MAX_BYTES if image else 256 * 1024
     request = Request(
         url, headers={"User-Agent": UA, "Accept": "image/*" if image else "application/json"}
@@ -280,12 +323,16 @@ def fetch(url, stop, *, image=False):
     except HTTPError as exc:
         try:
             if exc.code == 404:
-                raise Missing() from None
+                raise Missing(provider + "-http-404") from None
             if exc.code in (429, 503):
                 gate.throttle((exc.headers.get("Retry-After") or "")[:128])
-            raise CoverUnavailable() from None
+            raise ResolutionFailure(provider + "-http-" + str(exc.code)) from None
         finally:
             exc.close()
+    except (URLError, OSError):
+        raise ResolutionFailure(provider + "-network") from None
+    except ValueError:
+        raise ResolutionFailure(provider + "-invalid") from None
 
 
 def metadata(url, stop):
@@ -350,7 +397,7 @@ def resolve(artist, stop):
                 if valid_id(identifier):
                     matches.add(identifier)
     if len(matches) != 1:
-        raise Missing()
+        raise Missing("identity-missing" if not matches else "identity-ambiguous")
     mbid = matches.pop()
     data = metadata(f"https://musicbrainz.org/ws/2/artist/{mbid}?inc=url-rels&fmt=json", stop)
     if data.get("id") != mbid:
@@ -365,13 +412,16 @@ def resolve(artist, stop):
             if re.fullmatch(r"Q[1-9][0-9]{0,15}", qid):
                 wikidata.add(qid)
     # Multiple linked photos are not competing identities; choose deterministically.
+    direct_failure = None
     if titles:
         try:
             return commons(sorted(titles)[0], mbid, "MusicBrainz image relationship", stop)
-        except Missing:
-            pass
+        except Missing as exc:
+            direct_failure = exc
+    if not wikidata and direct_failure is not None:
+        raise direct_failure
     if len(wikidata) != 1:
-        raise Missing()
+        raise Missing("wikidata-missing" if not wikidata else "wikidata-ambiguous")
     qid = wikidata.pop()
     query = urlencode(
         dict(action="wbgetentities", ids=qid, props="claims", format="json", maxlag=5)
@@ -389,7 +439,7 @@ def resolve(artist, stop):
         if snak.get("snaktype") == "value" and isinstance(value, str):
             titles.add("File:" + value)
     if len(titles) != 1:
-        raise Missing()
+        raise Missing("wikidata-missing" if not titles else "wikidata-ambiguous")
     return commons(titles.pop(), mbid, "Wikidata P18", stop)
 
 
@@ -433,9 +483,9 @@ class ArtistImages:
             if not 0 < value["until"] - time.time() <= 7 * 86400:
                 return None
             if value["status"] == "missing":
-                return b"", {}
+                return b"", {"reason": safe_reason(value.get("reason", "image-unavailable"))}
             if value["status"] == "retry":
-                raise CoverUnavailable()
+                raise ResolutionFailure(value.get("reason", "cached-retry"))
             if value["status"] != "ok" or not valid_id(value["credits"]["artistMbid"]):
                 return None
             data = base64.b64decode(value["image"], validate=True)
@@ -476,10 +526,10 @@ class ArtistImages:
         try:
             stop = Deadline(self.stop, deadline)
             if stop.is_set():
-                raise CoverUnavailable()
+                raise ResolutionFailure("lookup-expired")
             data, credits = resolve(artist, stop)
             if stop.is_set():
-                raise CoverUnavailable()
+                raise ResolutionFailure("lookup-expired")
             if not data:
                 raise ValueError("Invalid image")
             credits = checked_credits(credits)
@@ -493,12 +543,22 @@ class ArtistImages:
                 ),
             )
             return data, credits
-        except Missing:
-            self.write(key, dict(status="missing", until=time.time() + 86400))
-            return b"", {}
-        except Exception:
-            self.write(key, dict(status="retry", until=time.time() + 300))
-            raise CoverUnavailable() from None
+        except Missing as exc:
+            self.write(
+                key,
+                dict(status="missing", until=time.time() + 86400, reason=safe_reason(exc.reason)),
+            )
+            return b"", {"reason": safe_reason(exc.reason)}
+        except Exception as exc:
+            reason = safe_reason(
+                getattr(
+                    exc,
+                    "reason",
+                    "invalid-response" if isinstance(exc, ValueError) else "lookup-failed",
+                )
+            )
+            self.write(key, dict(status="retry", until=time.time() + 300, reason=reason))
+            raise ResolutionFailure(reason) from None
 
     def key(self, artist):
         return sha256(
@@ -508,12 +568,19 @@ class ArtistImages:
     def info(self, artist):
         try:
             cached = self.read(self.key(artist))
-        except CoverUnavailable:
-            return {"status": "retry"}
+        except CoverUnavailable as exc:
+            return {
+                "status": "retry",
+                "reason": safe_reason(getattr(exc, "reason", "cached-retry")),
+            }
         if cached is None:
             return {"status": "pending"}
         data, credits = cached
-        return {"status": "ready", "credits": credits} if data else {"status": "unavailable"}
+        return (
+            {"status": "ready", "credits": credits}
+            if data
+            else {"status": "unavailable", "reason": credits.get("reason", "image-unavailable")}
+        )
 
     def get(self, artist):
         key = self.key(artist)
@@ -522,12 +589,12 @@ class ArtistImages:
             return cached
         with self.lock:
             if self.stop.is_set():
-                raise CoverUnavailable()
+                raise ResolutionFailure("shutdown")
             future = self.pending.get(key)
             created = False
             if future is None:
                 if len(self.pending) >= 8:
-                    raise CoverUnavailable()
+                    raise ResolutionFailure("queue-full")
                 future = self.pool.submit(self.run, key, artist, time.monotonic() + 25)
                 self.pending[key] = future
                 created = True
@@ -540,8 +607,10 @@ class ArtistImages:
             future.add_done_callback(finished)
         try:
             return future.result(timeout=8)
-        except (TimeoutError, CancelledError):
-            raise CoverUnavailable() from None
+        except TimeoutError:
+            raise ResolutionFailure("lookup-pending") from None
+        except CancelledError:
+            raise ResolutionFailure("shutdown") from None
 
     def close(self):
         self.stop.set()

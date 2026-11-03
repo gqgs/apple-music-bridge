@@ -86,7 +86,20 @@ def request(server, endpoint, params=None, method="GET", headers=None, auth=True
 
 
 def payload(server, endpoint, params=None, **kwargs):
-    return json.loads(request(server, endpoint, params, **kwargs)[2])["subsonic-response"]
+    status, headers, body = request(server, endpoint, params, **kwargs)
+    if headers["Content-Type"].startswith("application/xml"):
+        import xml.etree.ElementTree as ET
+
+        root = ET.fromstring(body)
+        result = dict(root.attrib)
+        error = root.find("{http://subsonic.org/restapi}error")
+        if error is not None:
+            result["error"] = {
+                "code": int(error.attrib["code"]),
+                "message": error.attrib["message"],
+            }
+        return result
+    return json.loads(body)["subsonic-response"]
 
 
 def test_auth_all_sensitive_routes_and_secret_free_errors(bridge, capsys):

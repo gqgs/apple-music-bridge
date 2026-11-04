@@ -10,6 +10,7 @@ from urllib.error import HTTPError
 from urllib.parse import urlencode
 from urllib.request import urlopen
 
+from .apple_album import fetch_album_page, parse_album_tracks
 from .model import Album, Artist, PlayerError, Track
 from .release_classifier import classify as classify_release
 
@@ -91,6 +92,20 @@ class Catalog:
 
     def request(self, endpoint, **params):
         key = endpoint + "?" + urlencode(params)
+
+        def fetch():
+            with urlopen("https://itunes.apple.com/" + key, timeout=15) as response:
+                payload = response.read(2_000_001)
+            if len(payload) > 2_000_000:
+                raise ValueError()
+            data = json.loads(payload)["results"]
+            if not isinstance(data, list):
+                raise ValueError()
+            return data
+
+        return self.cached_request(key, fetch)
+
+    def cached_request(self, key, fetch):
         if key in self.responses and time.monotonic() - self.response_times.get(key, 0) < 3600:
             self.last_response_source = (key, "memory cache")
             return self.responses[key]
@@ -100,13 +115,7 @@ class Catalog:
                 raise CatalogDeferred(delay)
             self.last_request = time.monotonic()
         try:
-            with urlopen("https://itunes.apple.com/" + key, timeout=15) as response:
-                payload = response.read(2_000_001)
-            if len(payload) > 2_000_000:
-                raise ValueError()
-            data = json.loads(payload)["results"]
-            if not isinstance(data, list):
-                raise ValueError()
+            data = fetch()
         except HTTPError as exc:
             if exc.code == 429:
                 value = (exc.headers.get("Retry-After", "") or "")[:128]
@@ -275,7 +284,8 @@ class Catalog:
         }
 
     def album(self, album_id, country):
-        rows = self.request("lookup", id=album_id, country=country, entity="song", limit=200)
+        params = dict(id=album_id, country=country, entity="song", limit=200)
+        rows = self.request("lookup", **params)
         collection = next(
             (
                 row
@@ -286,6 +296,34 @@ class Catalog:
             ),
             {},
         )
+        if (
+            collection
+            and not any(
+                isinstance(row, dict)
+                and row.get("kind") == "song"
+                and str(row.get("collectionId", "")) == album_id
+                for row in rows
+            )
+            and self.positive_number(collection.get("trackCount"))
+        ):
+            # Streaming-only releases (notably DJ mixes) can have an iTunes
+            # collection but no Store song rows. Use the exact public Music page.
+            count = collection["trackCount"]
+            if self.last_response_source == ("lookup?" + urlencode(params), "network"):
+                # One upstream read per actor turn: replay checks cancellation and
+                # the deadline before starting a second potentially slow request.
+                raise CatalogDeferred(max(0.0, self.last_request + 3 - time.monotonic()))
+
+            def fetch():
+                tracks = parse_album_tracks(
+                    fetch_album_page(country, album_id), country, album_id, count
+                )
+                if tracks is None:
+                    raise ValueError("Incomplete album metadata")
+                return tracks
+
+            key = "apple-album?" + urlencode(dict(id=album_id, country=country, count=count))
+            rows = self.cached_request(key, fetch)
         songs = [
             {
                 **collection,

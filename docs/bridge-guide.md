@@ -98,6 +98,14 @@ The GitHub repository has **not** been renamed yet.
   releases or rank unexpectedly. Artist-first client search avoids extra category
   requests. Shared catalog spacing is at least three seconds; cold artist images
   can load slowly. [Protocol details](opensubsonic-poc.md).
+- Some streaming-only albums (including DJ mixes) have iTunes album metadata but
+  no iTunes song rows. For these albums, the bridge falls back to the exact public
+  Apple Music album page, with no account credentials or audio/preview requests.
+  It requires a complete, matching track list, preserves individual song credits
+  and the album artist, and uses the catalog's existing request spacing, one-hour
+  cache and retry limits. Failed or changed pages report a catalog error rather
+  than a successful empty album. This fallback is limited to 200 tracks and
+  does not establish playback availability for an account or selected quality.
 - Artist images are available release covers, not portraits. Artwork requests are
   bounded, HTTPS/host/redirect validated and decoded as PNG/JPEG/WebP within 2 MiB
   and 2048×2048 input limits, then served as PNG. The 400px CDN substitution is

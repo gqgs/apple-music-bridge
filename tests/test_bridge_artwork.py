@@ -144,7 +144,7 @@ def test_slow_art_deduplicates_without_blocking_ping_or_core(bridge, monkeypatch
         calls.append(url)
         entered.set()
         assert release.wait(3)
-        return image_bytes()
+        return decode(image_bytes(), 1024)
 
     monkeypatch.setattr(server.covers, "load", slow)
     with ThreadPoolExecutor(5) as pool:
@@ -215,7 +215,7 @@ def test_worker_and_waiter_bounds_and_close(tmp_path, monkeypatch):
     def slow(url):
         calls.append(url)
         assert release.wait(3)
-        return image_bytes()
+        return decode(image_bytes(), 1024)
 
     monkeypatch.setattr(covers, "load", slow)
     with ThreadPoolExecutor(8) as pool:
@@ -241,15 +241,15 @@ def test_worker_and_waiter_bounds_and_close(tmp_path, monkeypatch):
 
 def test_higher_resolution_and_client_size(tmp_path, monkeypatch):
     calls = transport(
-        monkeypatch, image_bytes(width=1024), final=URL.replace("100x100", "1024x1024")
+        monkeypatch, image_bytes(width=1400), final=URL.replace("100x100", "1400x1400")
     )
     covers = Covers(tmp_path / "art")
     try:
         image = decode(covers.get(URL, 600), 2048)
         assert image.width == 600  # No inherited 256px decoder ceiling.
-        assert calls == [(URL.replace("100x100", "1024x1024"), 8)]
-        assert decode(covers.get(URL, 5000), 2048).width == 1024
-        assert len(calls) == 1
+        assert calls == [(URL.replace("100x100", "600x600"), 8)]
+        assert decode(covers.get(URL, 5000), 2048).width == 1400
+        assert len(calls) == 2
     finally:
         covers.close()
 
@@ -272,7 +272,7 @@ def test_bad_variant_falls_back_to_original_and_is_not_retried(tmp_path, monkeyp
     try:
         assert decode(covers.get(URL)).width == 100  # Never upscale fallback.
         assert decode(covers.get(URL)).width == 100
-        assert calls == [URL.replace("100x100", "400x400"), URL]
+        assert calls == [URL.replace("100x100", "1400x1400"), URL]
     finally:
         covers.close()
 
@@ -305,6 +305,58 @@ def test_http_requested_cover_size(bridge, monkeypatch):
     )
 
 
+@pytest.mark.parametrize("size", [None, "0", "1400", "4096"])
+def test_full_cover_is_bounded_1400_instead_of_thumbnail(bridge, monkeypatch, size):
+    server, _ = bridge
+    server.actor.call("remember", [replace(ALBUM, artwork_url=URL)])
+    calls = transport(monkeypatch, image_bytes(width=1400))
+    params = {"id": "am:br:lossless:album:2"}
+    if size is not None:
+        params["size"] = size
+    response = request(server, "getCoverArt", params)
+    assert response[0] == 200
+    assert decode(response[2], 2048).width == 1400
+    assert calls == [(URL.replace("100x100", "1400x1400"), 8)]
+
+
+def test_300_thumbnail_uses_matching_cdn_bucket_and_encodes_once(tmp_path, monkeypatch):
+    from apple_music_player.bridge import artwork
+
+    calls = transport(monkeypatch, image_bytes(width=300))
+    encoded_sizes = []
+    original_png = artwork.png
+
+    def encode(image):
+        encoded_sizes.append(image.size)
+        return original_png(image)
+
+    monkeypatch.setattr(artwork, "png", encode)
+    covers = Covers(tmp_path)
+    try:
+        for _ in range(2):  # Cold network load, then warm disk load.
+            assert decode(covers.get(URL, 300), 2048).width == 300
+        assert calls == [(URL.replace("100x100", "300x300"), 8)]
+        assert len(encoded_sizes) == 2
+        assert all(size[0] == 300 for size in encoded_sizes)
+    finally:
+        covers.close()
+
+
+def test_shared_decoded_source_is_not_resized_in_place(tmp_path, monkeypatch):
+    covers = Covers(tmp_path)
+    shared = decode(image_bytes(width=400), 1024)
+    monkeypatch.setattr(covers, "_get", lambda *args, **kwargs: shared)
+    try:
+        with ThreadPoolExecutor(4) as pool:
+            sizes = [100, 300, 80, 400] * 5
+            results = list(pool.map(lambda size: decode(covers.get(URL, size), 2048).width, sizes))
+        assert results == sizes
+        assert shared.width == 400
+        assert not hasattr(shared, "encoderinfo")
+    finally:
+        covers.close()
+
+
 def test_supersonic_five_worker_burst_returns_every_cover(bridge, monkeypatch):
     import time
 
@@ -319,7 +371,7 @@ def test_supersonic_five_worker_burst_returns_every_cover(bridge, monkeypatch):
     def delayed(url):
         calls.append(url)
         time.sleep(0.015)
-        return image_bytes(width=400)
+        return decode(image_bytes(width=400), 1024)
 
     monkeypatch.setattr(server.covers, "load", delayed)
 
@@ -458,23 +510,24 @@ def test_cover_protocol_errors_never_look_like_successful_images(
     assert headers["Content-Type"].startswith("application/xml") and b"<error " in body
 
 
-def test_normalized_png_can_exceed_source_byte_cap(tmp_path, monkeypatch):
+@pytest.mark.parametrize("width", [1024, 1400])
+def test_normalized_png_can_exceed_source_byte_cap(tmp_path, monkeypatch, width):
     import random
 
     from PIL import Image
 
     # Valid small JPEG expands to >2 MiB PNG after decoding; source limit still applies.
-    source = Image.frombytes("RGB", (1024, 1024), random.Random(7).randbytes(1024 * 1024 * 3))
+    source = Image.frombytes("RGB", (width, width), random.Random(7).randbytes(width * width * 3))
     stream = io.BytesIO()
-    source.save(stream, format="JPEG", quality=95)
+    source.save(stream, format="JPEG", quality=85)
     assert len(stream.getvalue()) < MAX_BYTES
     transport(monkeypatch, stream.getvalue())
     covers = Covers(tmp_path)
     try:
-        output = covers.get(URL, 1024)
+        output = covers.get(URL, width)
         assert len(output) > MAX_BYTES
         with Image.open(io.BytesIO(output)) as image:
             image.load()
-            assert image.size == (1024, 1024) and image.format == "PNG"
+            assert image.size == (width, width) and image.format == "PNG"
     finally:
         covers.close()

@@ -432,7 +432,7 @@ class Handler(BaseHTTPRequestHandler):
                 identifier = params["id"].removeprefix("artist-release:")
                 album = self.server.release_art.get(identifier)
                 image = self.server.covers.get(
-                    album.artwork_url, number(params, "size", 400, 1024), background=True
+                    album.artwork_url, number(params, "size", 0, 4096), background=True
                 )
                 self.reply(
                     200,
@@ -459,7 +459,7 @@ class Handler(BaseHTTPRequestHandler):
                 finally:
                     self.server.metadata_slots.release()
             if method == "getCoverArt":
-                image = self.server.covers.get(payload, number(params, "size", 400, 4096))
+                image = self.server.covers.get(payload, number(params, "size", 0, 4096))
                 self.reply(
                     200,
                     image or placeholder(),

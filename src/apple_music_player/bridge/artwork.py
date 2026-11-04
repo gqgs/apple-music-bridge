@@ -9,8 +9,10 @@ from urllib.parse import urlsplit, urlunsplit
 
 from PIL import Image
 
-from ..artwork import BADGE_URL, ArtworkCache, allowed_url, decode, png
+from ..artwork import BADGE_URL, ArtworkCache, allowed_url, png
 from .metrics import Metrics
+
+MAX_COVER_SIZE = 1400
 
 
 def sized_url(url, size):
@@ -21,7 +23,9 @@ def sized_url(url, size):
     match = re.fullmatch(r"(.*/)([1-9][0-9]{0,3})x\2(bb\.(?:jpg|jpeg|png|webp))", parts.path)
     if parts.query or not parts.path.startswith("/image/thumb/") or not match:
         return url
-    bucket = next(n for n in (128, 256, 400, 512, 1024) if n >= size)
+    bucket = next(
+        n for n in (128, 256, 300, 400, 512, 600, 1024, 1200, MAX_COVER_SIZE) if n >= size
+    )
     if int(match[2]) >= size:
         return url
     return urlunsplit(parts._replace(path=f"{match[1]}{bucket}x{bucket}{match[3]}"))
@@ -37,7 +41,9 @@ class CoverUnavailable(Exception):
 class Covers:
     def __init__(self, root, metrics=None):
         self.cache = ArtworkCache(
-            root, validator=lambda url: allowed_url(url) and url != BADGE_URL, max_dimension=1024
+            root,
+            validator=lambda url: allowed_url(url) and url != BADGE_URL,
+            max_dimension=MAX_COVER_SIZE,
         )
         self.pool = ThreadPoolExecutor(max_workers=2, thread_name_prefix="bridge-art")
         self.background_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="artist-art")
@@ -56,7 +62,7 @@ class Covers:
             self.cache.failures.get(url, "unavailable") if image is None else "ok",
             time.monotonic() - start,
         )
-        return b"" if image is None else png(image)
+        return image
 
     def finished(self, url, future):
         try:
@@ -81,26 +87,30 @@ class Covers:
                     with self.cache.lock:
                         self.cache.failures.pop(old, None)
 
-    def get(self, url, size=400, *, background=False):
+    def get(self, url, size=0, *, background=False):
         if not url:
             self.metrics.record("cover_wait", "missing")
             return b""  # Only genuinely absent metadata gets a successful placeholder.
         start = time.monotonic()
-        size = max(1, min(1024, int(size) or 400))
+        # OpenSubsonic clients omit size for full artwork, not for a thumbnail.
+        # Bound that request without silently reducing Now Playing to 400 pixels.
+        size = max(1, min(MAX_COVER_SIZE, int(size) or MAX_COVER_SIZE))
         deadline = start + 20
         candidate = sized_url(url, size)
         try:
             try:
-                data = self._get(candidate, deadline, background=background)
+                image = self._get(candidate, deadline, background=background)
             except CoverUnavailable:
                 if candidate == url or time.monotonic() >= deadline:
                     raise
-                data = self._get(url, deadline, background=background)
-            # Internally normalized 1024px RGBA PNG may exceed the 2 MiB input cap.
-            image = decode(data, 1024, max_bytes=5 * 1024**2)
+                image = self._get(url, deadline, background=background)
+            # Concurrent clients can share a decoded source. Pillow's encoder also
+            # mutates image attributes, so give every response its own copy.
+            image = image.copy()
             if max(image.size) > size:
                 image.thumbnail((size, size), Image.Resampling.LANCZOS)
-                data = png(image)
+            # Encode once at the output size, without an intermediate PNG decode.
+            data = png(image)
             self.metrics.record("cover_wait", "ok", time.monotonic() - start)
             return data
         except CoverUnavailable:
@@ -114,7 +124,7 @@ class Covers:
         image = self.cache.load(url, cache_only=True)
         if image is not None:
             self.metrics.record("cover_cache", "hit")
-            return png(image)
+            return image
         self.metrics.record("cover_cache", "miss")
         with self.lock:
             attempts, after = self.failures.get(url, (0, 0))
@@ -141,10 +151,10 @@ class Covers:
         if created:
             future.add_done_callback(lambda f: self.finished(url, f))
         try:
-            data = future.result(timeout=max(0, deadline - time.monotonic()))
-            if not data:
+            image = future.result(timeout=max(0, deadline - time.monotonic()))
+            if image is None:
                 raise CoverUnavailable()
-            return data
+            return image
         except TimeoutError:
             self.metrics.record("cover_wait", "timeout")
             raise CoverUnavailable() from None

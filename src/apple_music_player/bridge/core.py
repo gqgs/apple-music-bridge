@@ -88,7 +88,7 @@ class Core:
             if runtime_root is not None:
                 self.runtime = ManagedRuntime(RuntimeStore(runtime_root))
                 if not self.runtime.signed_in():
-                    raise PlayerError("Complete managed setup in the player first.")
+                    raise PlayerError("Run apple-music-bridge setup and login first.")
                 self.runtime.start()
                 self.downloader = Downloader(str(self.runtime.store.downloader), self.cache.staging)
             elif downloader_factory:

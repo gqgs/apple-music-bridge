@@ -25,7 +25,8 @@ satisfies the upstream file-existence check; the overall 180-second login deadli
 continues while waiting for terminal input. Cancellation, failure and timeout
 close descriptors, stop only the owned process group and restore the old session.
 Interrupted login recovery and `.player-login-ok` receipts remain compatible.
-Stored device/session tokens are protected by filesystem permissions, not encrypted.
+Terminal reads remain bounded and keep polling even after partial input followed
+by Ctrl-D; empty EOF cancels. Stored device/session tokens are protected by filesystem permissions, not encrypted.
 
 `serve` starts an existing signed-in runtime, checks local readiness and supervises
 its lifetime. An open port/local saved session does not prove current account media
@@ -38,3 +39,8 @@ The old `apple_music_player.runtime_child` module path is intentionally retained
 Existing runtime directories and credentials are reused without automatic moves;
 see README migration instructions. The bridge-only image codec uses Pillow and
 needs no QCoreApplication or Qt plugin initialization.
+
+`status` takes the runtime ownership lock when available and verifies installation
+hashes. The existing store constructor can prune interrupted `install-*` staging;
+it does not recover or modify login transactions/session files. If another process
+owns the runtime, status reports that and probes only the local health endpoint.

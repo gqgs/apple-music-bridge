@@ -42,6 +42,7 @@ form POST. Standard `c` and `v` parameters are required. Supported methods:
 
 - `ping`, `getLicense`, `getMusicFolders`, `getUser`, `tokenInfo`;
 - `getOpenSubsonicExtensions` (static public discovery only);
+- optional authenticated `getAlbumAudioQuality` ([catalog availability](album-quality.md));
 - `search3`, `getArtists`, `getArtist`, `getArtistInfo2`, `getAlbum`, `getSong`;
 - `getAlbumList2` (`alphabeticalByName` and `newest`);
 - empty read-only `getPlaylists`, `getGenres`, `getInternetRadioStations`;

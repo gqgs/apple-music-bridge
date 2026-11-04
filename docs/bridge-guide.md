@@ -102,6 +102,16 @@ The GitHub repository has **not** been renamed yet.
   bounded, HTTPS/host/redirect validated and decoded as PNG/JPEG/WebP within 2 MiB
   and 2048×2048 input limits, then served as PNG. The 400px CDN substitution is
   best-effort and falls back to the returned original URL. [Artwork details](artist-artwork.md).
+- Album quality badges are optional catalog availability metadata, fetched only
+  when a compatible client requests an album badge. The bridge reads the public
+  Apple Music album page without account credentials, cookies, previews, or audio
+  downloads. It validates the exact storefront/album and fails closed if the page
+  changes or is unavailable. Results are cached for one day (failed lookups five
+  minutes), capped at 256 albums, with at most two concurrent requests. Apple sees
+  the public album URL and the bridge machine's network address. The extra page
+  request does not block catalog browsing or streaming. Badges describe advertised
+  availability, not the selected download, every track, or the device's output.
+  [Optional extension](album-quality.md).
 - Full tracks download before streaming. Media is probed, preference profiles remain
   separate, concurrent requests share work, and streaming leases protect files
   from eviction. Cached fallback files are reused for that preference until normal

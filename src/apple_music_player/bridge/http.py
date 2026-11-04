@@ -16,6 +16,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
 from ..model import PlayerError
+from .album_quality import AlbumQuality
 from .artwork import Covers, CoverUnavailable
 from .core import BridgeError, Core
 from .release_artwork import ReleaseArtwork, safe_reason
@@ -23,6 +24,7 @@ from .release_artwork import ReleaseArtwork, safe_reason
 EXTENSIONS = [
     {"name": "apiKeyAuthentication", "versions": [1]},
     {"name": "formPost", "versions": [1]},
+    {"name": "appleMusicAlbumAudioQuality", "versions": [1]},
 ]
 
 
@@ -423,6 +425,22 @@ class Handler(BaseHTTPRequestHandler):
                 return
             if method == "getLyricsBySongId":
                 self.server.actor.core.parse(params.get("id", ""), "song")
+            if method == "getAlbumAudioQuality":
+                identifier = params.get("id", "")
+                _, numeric = self.server.actor.core.parse(identifier, "album")
+                self.api_response(
+                    {
+                        "albumAudioQuality": {
+                            "id": identifier,
+                            "source": "apple-music-catalog",
+                            "available": self.server.album_quality.get(
+                                self.server.actor.core.country, numeric
+                            ),
+                        }
+                    },
+                    fmt,
+                )
+                return
             if method == "getArtistArtworkInfo":
                 self.api_response(
                     {"artistArtworkInfo": self.server.release_art.info(params.get("id", ""))}, fmt
@@ -564,6 +582,7 @@ class Server(ThreadingHTTPServer):
         self.metrics = actor.metrics
         self.covers = Covers(actor.core.cache.root / "artwork", self.metrics)
         self.release_art = ReleaseArtwork(actor)
+        self.album_quality = AlbumQuality()
         try:
             super().__init__(("127.0.0.1", port), Handler)
         except Exception:

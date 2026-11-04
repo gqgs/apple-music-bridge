@@ -1,121 +1,47 @@
 # apple-music-bridge
 
-A local, read-only OpenSubsonic bridge for Apple Music. Use a client such as
-[Supersonic](https://github.com/gqgs/supersonic) to browse, search and play full
-lossless or spatial-audio files. The bridge handles catalog metadata, downloads,
-artwork and a bounded media cache. It does not transcode audio or confirm your
-receiver's output mode; Atmos passthrough depends on the client and hardware.
+Local Apple Music → OpenSubsonic bridge for clients such as
+[Supersonic](https://github.com/gqgs/supersonic). Supports lossless and Atmos files;
+audio output/passthrough is handled by your client.
 
-## Install and run
+Requires **Python 3.11+, ffprobe, Linux x86_64**, and permitted unprivileged user
+namespaces. No Qt or mpv required by the bridge. Never run it with sudo.
 
-Requires Python 3.11+, **ffprobe** (usually provided by ffmpeg), and Linux x86_64
-with permitted unprivileged user namespaces/mounts for the managed runtime.
-No Qt, display server or mpv installation is required by the bridge.
+## Install
 
 ```sh
 python -m venv .venv
 . .venv/bin/activate
-pip install -e '.[dev]'
-apple-music-bridge --help
+pip install -e .
 ```
 
-For a **new installation**, obtain the pinned `wrapper-lite-linux-x86_64` ZIP
-from the [upstream artifact run](https://github.com/WorldObservationLog/wrapper/actions/runs/41407950505).
-GitHub may require browser sign-in. Review the third-party runtime origin before
-installing; this project does not bundle its proprietary assets. The recorded
-artifact expiration is January 31, 2027. If unavailable, setup is blocked until a
-new verified pin is supplied; do not substitute a `latest` or classic wrapper ZIP.
+## Set up and sign in
+
+New installations need the pinned [rootless runtime ZIP](https://github.com/WorldObservationLog/wrapper/actions/runs/41407950505).
+Setup verifies its checksum and downloads pinned amdl; it does not sign in.
 
 ```sh
 apple-music-bridge setup --archive /path/to/wrapper-lite-linux-x86_64.zip --accept-runtime
 apple-music-bridge login
-apple-music-bridge status
-apple-music-bridge serve
 ```
 
-Setup validates the ZIP checksum, installs the rootless launcher and downloads
-pinned amdl. It does not execute the runtime or sign in. Login prompts locally for
-your Apple account, hidden password and hidden verification code when requested.
-Never pass Apple credentials as command arguments or put them in configuration.
-Ctrl-C cancels login and restores the previous session. Stop `serve` before login.
-No command uses sudo or changes host security policy.
+Login prompts locally for your account, hidden password and 2FA code. Credentials
+must not go in command arguments or logs. Session tokens are private files, not encrypted.
 
-`serve` starts the previously installed, signed-in runtime and binds the bridge
-to **127.0.0.1:4533**. Configure your client using the username and key in
-`$XDG_CONFIG_HOME/apple-music-bridge/auth.json` (default
-`~/.config/apple-music-bridge/auth.json`); the key is the client password/API key.
-Read that private file locally; do not paste it into logs or chat. These credentials
-are separate from your Apple account. Client access is authenticated; remote
-binding and browser access are not supported.
-
-Useful options:
+## Run
 
 ```sh
-apple-music-bridge serve --country br --quality lossless --cache-gib 10
-apple-music-bridge serve --country br --quality atmos --diagnostics
+apple-music-bridge serve --country br --quality lossless
 ```
 
-Choose the storefront matching your Apple subscription. Defaults are `br`,
-lossless, 10 GiB and port 4533. Flags are not silently persisted. Diagnostics
-contain aggregate timings/outcomes, not queries, credentials or raw upstream logs.
-The runtime's local API uses port 12340; the bridge never kills an unrelated owner.
+Use `--quality atmos` for spatial audio. Point your client at `http://127.0.0.1:4533`;
+use the username/key from `~/.config/apple-music-bridge/auth.json` as client
+credentials. Keep that file private. `apple-music-bridge status` checks setup.
 
-## Existing installations
+**Already using the bridge?** Skip setup/login. Existing legacy runtime sessions
+and bridge caches are reused in place. Keep your existing `--auth-file`, `--cache`
+and custom `--runtime-root` paths. The old `python -m apple_music_player.bridge`
+command still works. Use a fresh virtual environment to drop Qt and old entrypoints.
 
-Do **not** repeat setup or login if your current session works. Installed runtimes
-under `$XDG_DATA_HOME/apple-music-player` are reused in place, including the existing
-`.player-login-ok` receipt and tokens. Fresh installations use
-`$XDG_DATA_HOME/apple-music-bridge`. If both contain installations, explicitly
-select `--runtime-root /existing/path` on each command. No session is moved/copied.
-
-Keep your existing bridge credential file and cache arguments:
-
-```sh
-apple-music-bridge serve --auth-file /existing/private/auth.json --runtime-root /existing/runtime
-```
-
-The cache remains `$XDG_CACHE_HOME/apple-music-bridge` (default
-`~/.cache/apple-music-bridge`). Supply `--cache /existing/path` if customized.
-Desktop settings/downloads/history are left untouched and are not imported as
-listening history. Select any previous nondefault storefront/quality explicitly.
-The old `python -m apple_music_player.bridge ...` invocation and flags remain
-supported. The internal package and `runtime_child` module retain their old names
-for compatibility; the desktop `apple-music-player` command is retired. A fresh
-virtual environment removes old PySide6 dependencies and stale entrypoints.
-The GitHub repository has **not** been renamed yet.
-
-## Behavior and limits
-
-- Public iTunes Search/Lookup metadata needs no developer token, but may omit
-  releases or rank unexpectedly. Artist-first client search avoids extra category
-  requests. Shared catalog spacing is at least three seconds; cold artist images
-  can load slowly. [Protocol details](docs/opensubsonic-poc.md).
-- Artist images are available release covers, not portraits. Artwork requests are
-  bounded, HTTPS/host/redirect validated and decoded as PNG/JPEG/WebP within 2 MiB
-  and 2048×2048 input limits, then served as PNG. The 400px CDN substitution is
-  best-effort and falls back to the returned original URL. [Artwork details](docs/artist-artwork.md).
-- Full tracks download before streaming. Media is probed, quality variants remain
-  separate, concurrent requests share work, and streaming leases protect files
-  from eviction. Requested Atmos is not proof of Atmos/JOC; actual metadata is
-  retained. Clients need appropriate passthrough support for spatial output.
-- Completed media uses LRU eviction. Staging has a 2 GiB per-job guard and a
-  128 MiB free-space reserve; fast writers can overshoot between checks. This is
-  not a hard total-disk quota. User downloads outside this cache are never deleted.
-- Runtime/session directories are private; stored tokens are **not encrypted**.
-  Login uses sealed memfd arguments and a private 2FA FIFO. No raw subprocess
-  output is logged. [Runtime/security details](docs/rootless-setup.md).
-- No library edits, cloud history, personalized recommendations, lyrics provider
-  or new DRM implementation. Pinned external amdl handles download/decryption.
-
-## Test
-
-```sh
-pytest -q tests experiments/release_network
-ruff check src tests experiments
-ruff format --check src tests experiments
-```
-
-Tests require ffmpeg for synthetic media and intentionally require PySide6 to be
-absent. They use fake runtime processes and catalog/image fixtures—no account,
-Apple downloads or proprietary runtime execution. Real sign-in and client/hardware
-lossless/Atmos acceptance still require local user testing.
+[Options, migration, tests and troubleshooting](docs/bridge-guide.md) ·
+[Runtime and authentication details](docs/rootless-setup.md)

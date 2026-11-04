@@ -107,12 +107,13 @@ def test_code_wait_observes_runtime_timeout(installed, monkeypatch):
     assert runtime.process is None and not runtime.transaction.exists()
 
 
-def test_terminal_no_echo_polling_and_restore():
+@pytest.mark.parametrize("value", ["synthetic-secret", "paß🔒"])
+def test_terminal_no_echo_polling_and_restore(value):
     master, slave = pty.openpty()
     original = termios.tcgetattr(slave)
     program = """from apple_music_player.cli import terminal_input
 value = terminal_input("Hidden: ", hidden=True)
-assert value == "synthetic-secret"
+assert value in ("synthetic-secret", "paß🔒")
 print("accepted")
 """
     process = subprocess.Popen(
@@ -126,12 +127,12 @@ print("accepted")
                 output += os.read(master, 4096)
         assert b"Hidden: " in output
         assert not termios.tcgetattr(slave)[3] & termios.ECHO
-        os.write(master, b"synthetic-secret\n")
+        os.write(master, (value + "\n").encode())
         process.wait(timeout=5)
         while select.select([master], [], [], 0)[0]:
             output += os.read(master, 4096)
         assert process.returncode == 0 and b"accepted" in output
-        assert b"synthetic-secret" not in output
+        assert value.encode() not in output
         assert termios.tcgetattr(slave) == original
     finally:
         if process.poll() is None:
@@ -248,5 +249,47 @@ except PlayerError:
         assert result.returncode == 0
         assert termios.tcgetattr(slave) == previous
     finally:
+        os.close(master)
+        os.close(slave)
+
+
+@pytest.mark.parametrize("entered", [b"123\x04", b"\x04"])
+def test_partial_canonical_eof_keeps_login_deadline_polling(entered):
+    master, slave = pty.openpty()
+    previous = termios.tcgetattr(slave)
+    program = """from apple_music_player.cli import terminal_input
+from apple_music_player.model import PlayerError
+import time
+end = time.monotonic() + 0.5
+def tick():
+    if time.monotonic() >= end:
+        raise PlayerError("deadline")
+try:
+    terminal_input("Hidden: ", hidden=True, tick=tick)
+except PlayerError as exc:
+    print("deadline observed" if str(exc) == "deadline" else "cancelled")
+"""
+    process = subprocess.Popen(
+        [sys.executable, "-c", program], stdin=slave, stdout=slave, stderr=slave
+    )
+    output = b""
+    try:
+        deadline = time.monotonic() + 5
+        while b"Hidden: " not in output and time.monotonic() < deadline:
+            if select.select([master], [], [], 0.1)[0]:
+                output += os.read(master, 4096)
+        assert b"Hidden: " in output
+        os.write(master, entered)
+        process.wait(timeout=3)
+        while select.select([master], [], [], 0)[0]:
+            output += os.read(master, 4096)
+        assert process.returncode == 0
+        assert (b"deadline observed" if entered.startswith(b"123") else b"cancelled") in output
+        assert b"123" not in output
+        assert termios.tcgetattr(slave) == previous
+    finally:
+        if process.poll() is None:
+            process.kill()
+            process.wait()
         os.close(master)
         os.close(slave)

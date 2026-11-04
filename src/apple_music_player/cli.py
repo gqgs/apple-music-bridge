@@ -46,19 +46,27 @@ def terminal_input(prompt, *, hidden=False, tick=None):
     fd = sys.stdin.fileno()
     previous = termios.tcgetattr(fd)
     try:
+        changed = termios.tcgetattr(fd)
+        changed[3] |= termios.ICANON | termios.ISIG
         if hidden:
-            changed = termios.tcgetattr(fd)
-            changed[3] &= ~termios.ECHO
-            termios.tcsetattr(fd, termios.TCSAFLUSH, changed)
+            changed[3] &= ~(termios.ECHO | termios.ECHONL)
+        termios.tcsetattr(fd, termios.TCSAFLUSH, changed)
         print(prompt, end="", flush=True)
+        pending = bytearray()
         while True:
             if tick:
                 tick()
-            if select.select([sys.stdin], [], [], 0.1)[0]:
-                value = sys.stdin.readline()
-                if not value:
+            if select.select([fd], [], [], 0.1)[0]:
+                # A canonical Ctrl-D can deliver a partial line. TextIO.readline()
+                # would then block waiting for more and prevent runtime polling.
+                chunk = os.read(fd, 4096)
+                if not chunk:
                     raise PlayerError("Login cancelled.")
-                return value.rstrip("\r\n")
+                pending.extend(chunk)
+                if len(pending) > 4096:
+                    raise PlayerError("Login input is too long.")
+                if b"\n" in pending:
+                    return bytes(pending).split(b"\n", 1)[0].rstrip(b"\r").decode("utf-8")
     finally:
         termios.tcsetattr(fd, termios.TCSAFLUSH, previous)
         if hidden:

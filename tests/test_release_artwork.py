@@ -17,6 +17,14 @@ ID = "am:br:lossless:artist:1"
 COVER = "artist-release:" + ID
 
 
+def admissions(service):
+    return sum(
+        m["count"]
+        for m in service.metrics.snapshot()
+        if m["stage"] == "artist_release" and m["outcome"] == "miss"
+    )
+
+
 def ready_album(**kwargs):
     return replace(
         ALBUM, **(dict(artwork_url=URL, store_url="https://music.apple.com/br/album/2") | kwargs)
@@ -100,7 +108,7 @@ def test_pending_enrichment_does_not_hold_http_or_search_and_deduplicates(bridge
     assert server.release_art.get(ID).id == ALBUM.id
 
 
-def test_burst_queue_and_start_budget_are_bounded(bridge):
+def test_burst_queue_is_bounded_but_new_jobs_are_not_minute_capped(bridge):
     server, _ = bridge
     server.actor.call("remember", [replace(ARTIST, id=str(i)) for i in range(1, 101)])
     entered, release = threading.Event(), threading.Event()
@@ -122,10 +130,10 @@ def test_burst_queue_and_start_budget_are_bounded(bridge):
     finally:
         release.set()
     wait_jobs(service)
-    service.starts.extend([time.monotonic()] * 4)
     with pytest.raises(ReleaseUnavailable) as result:
         service.get("am:br:lossless:artist:99")
-    assert result.value.reason == "release-busy"
+    assert result.value.reason == "release-pending"
+    wait_jobs(service)
 
 
 def test_miss_and_positive_selection_survive_service_restart(bridge):
@@ -188,7 +196,7 @@ def test_large_index_does_not_schedule_and_selection_updates(bridge):
     server.actor.call("remember", [replace(ARTIST, id=str(i)) for i in range(1, 513)])
     result = payload(server, "getArtists")["artists"]
     assert sum(len(index["artist"]) for index in result["index"]) == 512
-    assert not server.release_art.pending and not server.release_art.starts
+    assert not server.release_art.pending and not admissions(server.release_art)
     server.actor.call("remember", [ready_album(release_date="2020-01-01")])
     # Even an otherwise valid stored row from another storefront cannot win.
     wrong = ready_album(id="99", country="us", release_date="2025-01-01")
@@ -216,7 +224,7 @@ def test_failed_lookup_is_bounded_and_invalid_identity_cannot_schedule(bridge):
     service.catalog = Failed()
     with pytest.raises(BridgeError):
         service.get("am:us:lossless:artist:1")
-    assert not service.starts
+    assert not admissions(service)
     with pytest.raises(ReleaseUnavailable):
         service.get(ID)
     wait_jobs(service)
@@ -224,7 +232,7 @@ def test_failed_lookup_is_bounded_and_invalid_identity_cannot_schedule(bridge):
     with pytest.raises(ReleaseUnavailable) as error:
         service.get(ID)
     assert error.value.reason == "release-failed"
-    assert len(service.starts) == 1
+    assert admissions(service) == 1
 
 
 @pytest.mark.parametrize("isolated", [False, True])
@@ -351,7 +359,7 @@ def test_failed_and_deferred_lookups_are_not_cached_as_absent(bridge, deferred):
     assert headers["X-Artwork-Reason"] == ("release-deferred" if deferred else "release-failed")
     assert 1 <= int(headers["Retry-After"]) <= (50 if deferred else 300)
     assert b"private response" not in body
-    assert len(server.release_art.starts) == 1
+    assert admissions(server.release_art) == 1
 
 
 def test_legacy_checks_migrate_without_inventing_a_confirmed_miss(tmp_path):
@@ -451,3 +459,111 @@ def test_exact_lookup_association_allows_featured_artist_release(bridge, via_det
     other = replace(ARTIST, id="2")
     server.actor.call("remember", [other])
     assert server.release_art.selection(other) is None
+
+
+def test_twelve_cold_artists_continue_with_shared_spacing(bridge, monkeypatch):
+    """Real request/parser/cache and virtual waits: no extra eight-per-minute stop."""
+    import io
+    import json
+    from urllib.parse import parse_qs, urlsplit
+
+    server, _ = bridge
+    server.actor.call("remember", [replace(ARTIST, id=str(i)) for i in range(1, 13)])
+    now = [100.0]
+    calls = []
+    monkeypatch.setattr("apple_music_player.catalog.time.monotonic", lambda: now[0])
+
+    class ClockStop:
+        stopped = False
+
+        def is_set(self):
+            return self.stopped
+
+        def wait(self, seconds):
+            now[0] += seconds
+            return self.stopped
+
+        def set(self):
+            self.stopped = True
+
+    server.release_art.stop = ClockStop()
+
+    def opened(url, timeout):
+        params = parse_qs(urlsplit(url).query)
+        calls.append((now[0], params))
+        artist = int(params["id"][0])
+        return io.BytesIO(
+            json.dumps(
+                {
+                    "results": [
+                        {
+                            "wrapperType": "collection",
+                            "collectionType": "Album",
+                            "artistId": artist,
+                            "collectionId": artist + 100,
+                            "collectionName": "Release - EP",
+                            "artworkUrl100": URL,
+                            "releaseDate": "2021-01-01T00:00:00Z",
+                        }
+                    ]
+                }
+            ).encode()
+        )
+
+    monkeypatch.setattr("apple_music_player.catalog.urlopen", opened)
+    for i in range(1, 13):
+        identifier = f"am:br:lossless:artist:{i}"
+        with pytest.raises(ReleaseUnavailable) as error:
+            server.release_art.get(identifier)
+        assert error.value.reason == "release-pending"
+        wait_jobs(server.release_art)
+        assert server.release_art.get(identifier).artist_id == str(i)
+    assert len(calls) == 12 and admissions(server.release_art) == 12
+    assert calls[-1][0] - calls[0][0] == pytest.approx(33)
+    assert all(b[0] - a[0] >= 3 for a, b in zip(calls, calls[1:], strict=False))
+    assert all(p["country"] == ["br"] and p["entity"] == ["album"] for _, p in calls)
+    # Cache-only revisits generate no provider requests or admission waits.
+    for i in range(1, 13):
+        server.release_art.get(f"am:br:lossless:artist:{i}")
+    assert len(calls) == 12
+
+
+def test_active_interactive_request_has_priority_over_release_lookup(bridge):
+    server, _ = bridge
+    server.actor.call("remember", [ARTIST])
+    entered, finish, background_called = threading.Event(), threading.Event(), threading.Event()
+
+    class Foreground:
+        def search(self, *args, **kwargs):
+            entered.set()
+            assert finish.wait(4)
+            return [ARTIST]
+
+    class Background:
+        def artist_albums(self, *args):
+            background_called.set()
+            return [ready_album()]
+
+    server.actor.core.catalog = Foreground()
+    server.release_art.catalog = Background()
+    try:
+        with ThreadPoolExecutor(1) as pool:
+            search = pool.submit(
+                payload,
+                server,
+                "search3",
+                {"query": "daughter", "artistCount": "1", "albumCount": "0", "songCount": "0"},
+            )
+            assert entered.wait(1) and not server.actor.metadata_idle.is_set()
+            # Model an upstream call lasting past the old one-second quiet window.
+            server.actor.last_metadata = time.monotonic() - 5
+            with pytest.raises(ReleaseUnavailable):
+                server.release_art.get(ID)
+            assert not background_called.wait(0.2)
+            finish.set()
+            assert search.result(timeout=1)["status"] == "ok"
+        assert background_called.wait(2)
+        wait_jobs(server.release_art)
+        assert server.actor.metadata_idle.is_set()
+    finally:
+        finish.set()

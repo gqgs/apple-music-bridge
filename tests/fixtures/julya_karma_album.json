@@ -1,0 +1,695 @@
+{
+  "header": {
+    "id": "album-detail-header - 1719860221",
+    "contentDescriptor": {
+      "kind": "album",
+      "identifiers": {
+        "storeAdamID": "1719860221"
+      },
+      "url": "https://music.apple.com/br/album/julya-karma-at-cercle-x-w-hotels-at-ade-2023-dj-mix/1719860221"
+    },
+    "trackCount": 23
+  },
+  "tracks": {
+    "id": "track-list - 1719860221",
+    "itemKind": "trackLockup",
+    "items": [
+      {
+        "id": "track-lockup - 1719860221 - 1719860222",
+        "title": "Everlasting Morning (Mixed)",
+        "trackNumber": 1,
+        "discNumber": 1,
+        "duration": 324224,
+        "contentDescriptor": {
+          "kind": "song",
+          "identifiers": {
+            "storeAdamID": "1719860222"
+          },
+          "url": "https://music.apple.com/br/album/everlasting-morning-mixed/1719860221?i=1719860222"
+        },
+        "artistName": "Stephan Barnem",
+        "subtitleLinks": [
+          {
+            "title": "Stephan Barnem",
+            "segue": {
+              "destination": {
+                "contentDescriptor": {
+                  "kind": "artist",
+                  "identifiers": {
+                    "storeAdamID": "325925747"
+                  },
+                  "url": "https://music.apple.com/br/artist/stephan-barnem/325925747"
+                }
+              }
+            }
+          }
+        ]
+      },
+      {
+        "id": "track-lockup - 1719860221 - 1719860225",
+        "title": "Hecate (Murat Uncuoglu Remix) [Mixed]",
+        "trackNumber": 2,
+        "discNumber": 1,
+        "duration": 346701,
+        "contentDescriptor": {
+          "kind": "song",
+          "identifiers": {
+            "storeAdamID": "1719860225"
+          },
+          "url": "https://music.apple.com/br/album/hecate-murat-uncuoglu-remix-mixed/1719860221?i=1719860225"
+        },
+        "artistName": "Incláme",
+        "subtitleLinks": [
+          {
+            "title": "Incláme",
+            "segue": {
+              "destination": {
+                "contentDescriptor": {
+                  "kind": "artist",
+                  "identifiers": {
+                    "storeAdamID": "1648561689"
+                  },
+                  "url": "https://music.apple.com/br/artist/incl%C3%A1me/1648561689"
+                }
+              }
+            }
+          }
+        ]
+      },
+      {
+        "id": "track-lockup - 1719860221 - 1719860226",
+        "title": "Doodles Corners (Mixed)",
+        "trackNumber": 3,
+        "discNumber": 1,
+        "duration": 250949,
+        "contentDescriptor": {
+          "kind": "song",
+          "identifiers": {
+            "storeAdamID": "1719860226"
+          },
+          "url": "https://music.apple.com/br/album/doodles-corners-mixed/1719860221?i=1719860226"
+        },
+        "artistName": "Cipy",
+        "subtitleLinks": [
+          {
+            "title": "Cipy",
+            "segue": {
+              "destination": {
+                "contentDescriptor": {
+                  "kind": "artist",
+                  "identifiers": {
+                    "storeAdamID": "339004586"
+                  },
+                  "url": "https://music.apple.com/br/artist/cipy/339004586"
+                }
+              }
+            }
+          }
+        ]
+      },
+      {
+        "id": "track-lockup - 1719860221 - 1719860227",
+        "title": "Espinosa (Mixed)",
+        "trackNumber": 4,
+        "discNumber": 1,
+        "duration": 347723,
+        "contentDescriptor": {
+          "kind": "song",
+          "identifiers": {
+            "storeAdamID": "1719860227"
+          },
+          "url": "https://music.apple.com/br/album/espinosa-mixed/1719860221?i=1719860227"
+        },
+        "artistName": "Mulya",
+        "subtitleLinks": [
+          {
+            "title": "Mulya",
+            "segue": {
+              "destination": {
+                "contentDescriptor": {
+                  "kind": "artist",
+                  "identifiers": {
+                    "storeAdamID": "1270856280"
+                  },
+                  "url": "https://music.apple.com/br/artist/mulya/1270856280"
+                }
+              }
+            }
+          }
+        ]
+      },
+      {
+        "id": "track-lockup - 1719860221 - 1719860228",
+        "title": "A Space (Mixed)",
+        "trackNumber": 5,
+        "discNumber": 1,
+        "duration": 176331,
+        "contentDescriptor": {
+          "kind": "song",
+          "identifiers": {
+            "storeAdamID": "1719860228"
+          },
+          "url": "https://music.apple.com/br/album/a-space-mixed/1719860221?i=1719860228"
+        },
+        "artistName": "Read the News",
+        "subtitleLinks": [
+          {
+            "title": "Read the News",
+            "segue": {
+              "destination": {
+                "contentDescriptor": {
+                  "kind": "artist",
+                  "identifiers": {
+                    "storeAdamID": "1649940152"
+                  },
+                  "url": "https://music.apple.com/br/artist/read-the-news/1649940152"
+                }
+              }
+            }
+          }
+        ]
+      },
+      {
+        "id": "track-lockup - 1719860221 - 1719860229",
+        "title": "Crossfade (Maceo Plex Mix) [Mixed]",
+        "trackNumber": 6,
+        "discNumber": 1,
+        "duration": 377093,
+        "contentDescriptor": {
+          "kind": "song",
+          "identifiers": {
+            "storeAdamID": "1719860229"
+          },
+          "url": "https://music.apple.com/br/album/crossfade-maceo-plex-mix-mixed/1719860221?i=1719860229"
+        },
+        "artistName": "GusGus",
+        "subtitleLinks": [
+          {
+            "title": "GusGus",
+            "segue": {
+              "destination": {
+                "contentDescriptor": {
+                  "kind": "artist",
+                  "identifiers": {
+                    "storeAdamID": "68852225"
+                  },
+                  "url": "https://music.apple.com/br/artist/gusgus/68852225"
+                }
+              }
+            }
+          }
+        ]
+      },
+      {
+        "id": "track-lockup - 1719860221 - 1719860230",
+        "title": "ID1 (from Julya Karma at Cercle x W Hotels at ADE 2023) [Mixed]",
+        "trackNumber": 7,
+        "discNumber": 1,
+        "duration": 261549,
+        "contentDescriptor": {
+          "kind": "song",
+          "identifiers": {
+            "storeAdamID": "1719860230"
+          },
+          "url": "https://music.apple.com/br/album/id1-from-julya-karma-at-cercle-x-w-hotels-at-ade-2023-mixed/1719860221?i=1719860230"
+        },
+        "artistName": "ID",
+        "subtitleLinks": [
+          {
+            "title": "ID"
+          }
+        ]
+      },
+      {
+        "id": "track-lockup - 1719860221 - 1719860231",
+        "title": "Circulate (Together) [Mixed]",
+        "trackNumber": 8,
+        "discNumber": 1,
+        "duration": 327800,
+        "contentDescriptor": {
+          "kind": "song",
+          "identifiers": {
+            "storeAdamID": "1719860231"
+          },
+          "url": "https://music.apple.com/br/album/circulate-together-mixed/1719860221?i=1719860231"
+        },
+        "artistName": "Booka Shade",
+        "subtitleLinks": [
+          {
+            "title": "Booka Shade",
+            "segue": {
+              "destination": {
+                "contentDescriptor": {
+                  "kind": "artist",
+                  "identifiers": {
+                    "storeAdamID": "129902516"
+                  },
+                  "url": "https://music.apple.com/br/artist/booka-shade/129902516"
+                }
+              }
+            }
+          }
+        ]
+      },
+      {
+        "id": "track-lockup - 1719860221 - 1719860232",
+        "title": "ID2 (from Julya Karma at Cercle x W Hotels at ADE 2023) [Mixed]",
+        "trackNumber": 9,
+        "discNumber": 1,
+        "duration": 304424,
+        "contentDescriptor": {
+          "kind": "song",
+          "identifiers": {
+            "storeAdamID": "1719860232"
+          },
+          "url": "https://music.apple.com/br/album/id2-from-julya-karma-at-cercle-x-w-hotels-at-ade-2023-mixed/1719860221?i=1719860232"
+        },
+        "artistName": "ID",
+        "subtitleLinks": [
+          {
+            "title": "ID"
+          }
+        ]
+      },
+      {
+        "id": "track-lockup - 1719860221 - 1719860233",
+        "title": "Adaptation (Mixed)",
+        "trackNumber": 10,
+        "discNumber": 1,
+        "duration": 331675,
+        "contentDescriptor": {
+          "kind": "song",
+          "identifiers": {
+            "storeAdamID": "1719860233"
+          },
+          "url": "https://music.apple.com/br/album/adaptation-mixed/1719860221?i=1719860233"
+        },
+        "artistName": "EdOne",
+        "subtitleLinks": [
+          {
+            "title": "EdOne",
+            "segue": {
+              "destination": {
+                "contentDescriptor": {
+                  "kind": "artist",
+                  "identifiers": {
+                    "storeAdamID": "1415832982"
+                  },
+                  "url": "https://music.apple.com/br/artist/edone/1415832982"
+                }
+              }
+            }
+          }
+        ]
+      },
+      {
+        "id": "track-lockup - 1719860221 - 1719860234",
+        "title": "Flex (Mixed)",
+        "trackNumber": 11,
+        "discNumber": 1,
+        "duration": 230248,
+        "contentDescriptor": {
+          "kind": "song",
+          "identifiers": {
+            "storeAdamID": "1719860234"
+          },
+          "url": "https://music.apple.com/br/album/flex-mixed/1719860221?i=1719860234"
+        },
+        "artistName": "Read the News",
+        "subtitleLinks": [
+          {
+            "title": "Read the News",
+            "segue": {
+              "destination": {
+                "contentDescriptor": {
+                  "kind": "artist",
+                  "identifiers": {
+                    "storeAdamID": "1649940152"
+                  },
+                  "url": "https://music.apple.com/br/artist/read-the-news/1649940152"
+                }
+              }
+            }
+          }
+        ]
+      },
+      {
+        "id": "track-lockup - 1719860221 - 1719860235",
+        "title": "Hypnotized (Mixed)",
+        "trackNumber": 12,
+        "discNumber": 1,
+        "duration": 273099,
+        "contentDescriptor": {
+          "kind": "song",
+          "identifiers": {
+            "storeAdamID": "1719860235"
+          },
+          "url": "https://music.apple.com/br/album/hypnotized-mixed/1719860221?i=1719860235"
+        },
+        "artistName": "Julya Karma",
+        "subtitleLinks": []
+      },
+      {
+        "id": "track-lockup - 1719860221 - 1719860236",
+        "title": "Never Yours, Boy (Mixed)",
+        "trackNumber": 13,
+        "discNumber": 1,
+        "duration": 242074,
+        "contentDescriptor": {
+          "kind": "song",
+          "identifiers": {
+            "storeAdamID": "1719860236"
+          },
+          "url": "https://music.apple.com/br/album/never-yours-boy-mixed/1719860221?i=1719860236"
+        },
+        "artistName": "Architectural",
+        "subtitleLinks": [
+          {
+            "title": "Architectural",
+            "segue": {
+              "destination": {
+                "contentDescriptor": {
+                  "kind": "artist",
+                  "identifiers": {
+                    "storeAdamID": "365713356"
+                  },
+                  "url": "https://music.apple.com/br/artist/architectural/365713356"
+                }
+              }
+            }
+          }
+        ]
+      },
+      {
+        "id": "track-lockup - 1719860221 - 1719860417",
+        "title": "Heimreise (Adriatique Remix) [Mixed]",
+        "trackNumber": 14,
+        "discNumber": 1,
+        "duration": 390224,
+        "contentDescriptor": {
+          "kind": "song",
+          "identifiers": {
+            "storeAdamID": "1719860417"
+          },
+          "url": "https://music.apple.com/br/album/heimreise-adriatique-remix-mixed/1719860221?i=1719860417"
+        },
+        "artistName": "Matthew Dekay",
+        "subtitleLinks": [
+          {
+            "title": "Matthew Dekay",
+            "segue": {
+              "destination": {
+                "contentDescriptor": {
+                  "kind": "artist",
+                  "identifiers": {
+                    "storeAdamID": "6455459"
+                  },
+                  "url": "https://music.apple.com/br/artist/matthew-dekay/6455459"
+                }
+              }
+            }
+          }
+        ]
+      },
+      {
+        "id": "track-lockup - 1719860221 - 1719860418",
+        "title": "Luminescence (Mixed)",
+        "trackNumber": 15,
+        "discNumber": 1,
+        "duration": 316121,
+        "contentDescriptor": {
+          "kind": "song",
+          "identifiers": {
+            "storeAdamID": "1719860418"
+          },
+          "url": "https://music.apple.com/br/album/luminescence-mixed/1719860221?i=1719860418"
+        },
+        "artistName": "19:26",
+        "subtitleLinks": [
+          {
+            "title": "19:26",
+            "segue": {
+              "destination": {
+                "contentDescriptor": {
+                  "kind": "artist",
+                  "identifiers": {
+                    "storeAdamID": "1599314462"
+                  },
+                  "url": "https://music.apple.com/br/artist/19-26/1599314462"
+                }
+              }
+            }
+          }
+        ]
+      },
+      {
+        "id": "track-lockup - 1719860221 - 1719860419",
+        "title": "A Lost Era (Mixed)",
+        "trackNumber": 16,
+        "discNumber": 1,
+        "duration": 423378,
+        "contentDescriptor": {
+          "kind": "song",
+          "identifiers": {
+            "storeAdamID": "1719860419"
+          },
+          "url": "https://music.apple.com/br/album/a-lost-era-mixed/1719860221?i=1719860419"
+        },
+        "artistName": "Gesaffelstein",
+        "subtitleLinks": [
+          {
+            "title": "Gesaffelstein",
+            "segue": {
+              "destination": {
+                "contentDescriptor": {
+                  "kind": "artist",
+                  "identifiers": {
+                    "storeAdamID": "283928791"
+                  },
+                  "url": "https://music.apple.com/br/artist/gesaffelstein/283928791"
+                }
+              }
+            }
+          }
+        ]
+      },
+      {
+        "id": "track-lockup - 1719860221 - 1719860420",
+        "title": "Gimme Gimme (Pional Remix) [Mixed]",
+        "trackNumber": 17,
+        "discNumber": 1,
+        "duration": 275126,
+        "contentDescriptor": {
+          "kind": "song",
+          "identifiers": {
+            "storeAdamID": "1719860420"
+          },
+          "url": "https://music.apple.com/br/album/gimme-gimme-pional-remix-mixed/1719860221?i=1719860420"
+        },
+        "artistName": "DRAMA",
+        "subtitleLinks": [
+          {
+            "title": "DRAMA",
+            "segue": {
+              "destination": {
+                "contentDescriptor": {
+                  "kind": "artist",
+                  "identifiers": {
+                    "storeAdamID": "1179641041"
+                  },
+                  "url": "https://music.apple.com/br/artist/drama/1179641041"
+                }
+              }
+            }
+          }
+        ]
+      },
+      {
+        "id": "track-lockup - 1719860221 - 1719860421",
+        "title": "Power Drive (Mixed)",
+        "trackNumber": 18,
+        "discNumber": 1,
+        "duration": 476298,
+        "contentDescriptor": {
+          "kind": "song",
+          "identifiers": {
+            "storeAdamID": "1719860421"
+          },
+          "url": "https://music.apple.com/br/album/power-drive-mixed/1719860221?i=1719860421"
+        },
+        "artistName": "Pryda",
+        "subtitleLinks": [
+          {
+            "title": "Pryda",
+            "segue": {
+              "destination": {
+                "contentDescriptor": {
+                  "kind": "artist",
+                  "identifiers": {
+                    "storeAdamID": "258421042"
+                  },
+                  "url": "https://music.apple.com/br/artist/pryda/258421042"
+                }
+              }
+            }
+          }
+        ]
+      },
+      {
+        "id": "track-lockup - 1719860221 - 1719860422",
+        "title": "Nu World (Mixed)",
+        "trackNumber": 19,
+        "discNumber": 1,
+        "duration": 265499,
+        "contentDescriptor": {
+          "kind": "song",
+          "identifiers": {
+            "storeAdamID": "1719860422"
+          },
+          "url": "https://music.apple.com/br/album/nu-world-mixed/1719860221?i=1719860422"
+        },
+        "artistName": "Maceo Plex",
+        "subtitleLinks": [
+          {
+            "title": "Maceo Plex",
+            "segue": {
+              "destination": {
+                "contentDescriptor": {
+                  "kind": "artist",
+                  "identifiers": {
+                    "storeAdamID": "401736318"
+                  },
+                  "url": "https://music.apple.com/br/artist/maceo-plex/401736318"
+                }
+              }
+            }
+          }
+        ]
+      },
+      {
+        "id": "track-lockup - 1719860221 - 1719860423",
+        "title": "Save Me (Mixed)",
+        "trackNumber": 20,
+        "discNumber": 1,
+        "duration": 237949,
+        "contentDescriptor": {
+          "kind": "song",
+          "identifiers": {
+            "storeAdamID": "1719860423"
+          },
+          "url": "https://music.apple.com/br/album/save-me-mixed/1719860221?i=1719860423"
+        },
+        "artistName": "Skatman",
+        "subtitleLinks": [
+          {
+            "title": "Skatman",
+            "segue": {
+              "destination": {
+                "contentDescriptor": {
+                  "kind": "artist",
+                  "identifiers": {
+                    "storeAdamID": "1446595975"
+                  },
+                  "url": "https://music.apple.com/br/artist/skatman/1446595975"
+                }
+              }
+            }
+          }
+        ]
+      },
+      {
+        "id": "track-lockup - 1719860221 - 1719860424",
+        "title": "Forever (Solomun Remix) [Mixed]",
+        "trackNumber": 21,
+        "discNumber": 1,
+        "duration": 325899,
+        "contentDescriptor": {
+          "kind": "song",
+          "identifiers": {
+            "storeAdamID": "1719860424"
+          },
+          "url": "https://music.apple.com/br/album/forever-solomun-remix-mixed/1719860221?i=1719860424"
+        },
+        "artistName": "Weval",
+        "subtitleLinks": [
+          {
+            "title": "Weval",
+            "segue": {
+              "destination": {
+                "contentDescriptor": {
+                  "kind": "artist",
+                  "identifiers": {
+                    "storeAdamID": "606587384"
+                  },
+                  "url": "https://music.apple.com/br/artist/weval/606587384"
+                }
+              }
+            }
+          }
+        ]
+      },
+      {
+        "id": "track-lockup - 1719860221 - 1719860425",
+        "title": "Tokyo Flower (Mixed)",
+        "trackNumber": 22,
+        "discNumber": 1,
+        "duration": 300450,
+        "contentDescriptor": {
+          "kind": "song",
+          "identifiers": {
+            "storeAdamID": "1719860425"
+          },
+          "url": "https://music.apple.com/br/album/tokyo-flower-mixed/1719860221?i=1719860425"
+        },
+        "artistName": "Krystal Klear",
+        "subtitleLinks": [
+          {
+            "title": "Krystal Klear",
+            "segue": {
+              "destination": {
+                "contentDescriptor": {
+                  "kind": "artist",
+                  "identifiers": {
+                    "storeAdamID": "383035822"
+                  },
+                  "url": "https://music.apple.com/br/artist/krystal-klear/383035822"
+                }
+              }
+            }
+          }
+        ]
+      },
+      {
+        "id": "track-lockup - 1719860221 - 1719860426",
+        "title": "Villa Mercedes (Mixed)",
+        "trackNumber": 23,
+        "discNumber": 1,
+        "duration": 236463,
+        "contentDescriptor": {
+          "kind": "song",
+          "identifiers": {
+            "storeAdamID": "1719860426"
+          },
+          "url": "https://music.apple.com/br/album/villa-mercedes-mixed/1719860221?i=1719860426"
+        },
+        "artistName": "Pryda",
+        "subtitleLinks": [
+          {
+            "title": "Pryda",
+            "segue": {
+              "destination": {
+                "contentDescriptor": {
+                  "kind": "artist",
+                  "identifiers": {
+                    "storeAdamID": "258421042"
+                  },
+                  "url": "https://music.apple.com/br/artist/pryda/258421042"
+                }
+              }
+            }
+          }
+        ]
+      }
+    ]
+  }
+}

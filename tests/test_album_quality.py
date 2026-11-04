@@ -9,12 +9,10 @@ from urllib.request import Request
 import pytest
 from test_bridge import bridge, payload, request  # noqa: F401
 
-from apple_music_player.bridge import album_quality
+from apple_music_player import apple_album
+from apple_music_player.apple_album import MAX_PAGE_BYTES, _AlbumRedirect, album_page_url
 from apple_music_player.bridge.album_quality import (
-    MAX_PAGE_BYTES,
     AlbumQuality,
-    _AlbumRedirect,
-    album_page_url,
     fetch_album_badges,
     parse_album_badges,
 )
@@ -136,7 +134,7 @@ def test_fetch_is_metadata_only_bounded_and_credential_free(monkeypatch):
             assert {k.lower(): v for k, v in req.header_items()} == {"accept": "text/html"}
             return Response(document(page(dolbyAtmos=True)))
 
-    monkeypatch.setattr(album_quality, "build_opener", lambda *handlers: Opener())
+    monkeypatch.setattr(apple_album, "build_opener", lambda *handlers: Opener())
     assert fetch_album_badges("br", "2") == ("dolby-atmos",)
     for country, identifier in (("../us", "2"), ("br", "2?secret=1")):
         with pytest.raises(ValueError):

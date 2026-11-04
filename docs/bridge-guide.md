@@ -60,6 +60,14 @@ lossless, 10 GiB and port 4533. Flags are not silently persisted. Diagnostics
 contain aggregate timings/outcomes, not queries, credentials or raw upstream logs.
 The runtime's local API uses port 12340; the bridge never kills an unrelated owner.
 
+`--quality` is a **preference**, not a format lock. `atmos` tries Atmos, then
+lossless, then AAC for each track; `lossless` tries lossless, then AAC. Keep the
+bridge running in Atmos mode for mixed playlists. Only explicit unavailable-format
+results trigger another attempt. Network, authentication, malformed-manifest,
+download, disk and cancellation errors stop the request instead of silently
+downgrading. Ordinary AC-3 returned by the upstream Atmos selector is retried as
+lossless, because Dolby Digital is not Atmos. No transcoding is performed.
+
 ## Existing installations
 
 Do **not** repeat setup or login if your current session works. Installed runtimes
@@ -94,10 +102,14 @@ The GitHub repository has **not** been renamed yet.
   bounded, HTTPS/host/redirect validated and decoded as PNG/JPEG/WebP within 2 MiB
   and 2048×2048 input limits, then served as PNG. The 400px CDN substitution is
   best-effort and falls back to the returned original URL. [Artwork details](artist-artwork.md).
-- Full tracks download before streaming. Media is probed, quality variants remain
+- Full tracks download before streaming. Media is probed, preference profiles remain
   separate, concurrent requests share work, and streaming leases protect files
-  from eviction. Requested Atmos is not proof of Atmos/JOC; actual metadata is
-  retained. Clients need appropriate passthrough support for spatial output.
+  from eviction. Cached fallback files are reused for that preference until normal
+  eviction; fallback does not change the next track's preference. Requested Atmos
+  is not proof of Atmos/JOC; actual metadata is retained. Stream headers report
+  `X-Media-Codec`, `X-Media-Atmos`, `X-Requested-Quality` and `X-Quality-Fallback`.
+  An unverified E-AC-3 stream is not labeled JOC-verified. Clients need appropriate
+  passthrough support for spatial output and PCM output for stereo tracks.
 - Completed media uses LRU eviction. Staging has a 2 GiB per-job guard and a
   128 MiB free-space reserve; fast writers can overshoot between checks. This is
   not a hard total-disk quota. User downloads outside this cache are never deleted.

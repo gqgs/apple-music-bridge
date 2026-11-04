@@ -78,8 +78,12 @@ queued duplicates recheck the media cache before downloading. Cache commit and
 lease acquisition run together on the core worker. Downloads do not hold that
 worker while fetching/decrypting/probing media; catalog waits can still delay a
 short cache transaction or track resolution. Full files download/probe/commit before
-response headers. Downloader timeout
-is 900 seconds; a client's shorter timeout may require retry after completion.
+response headers. Downloader timeout is 900 seconds across all per-track format
+attempts; a client's shorter timeout may require retry after completion. The quality
+profile is a preference: Atmos → lossless → AAC, or lossless → AAC. Explicit format
+misses can fall back; network/authentication/download errors do not. Actual probed
+codec/JOC metadata and `X-Quality-Fallback` distinguish a fallback from the requested
+preference. Successful fallback files remain cached under the preference profile.
 Completed media is bounded by the configured limit, with the existing separate
 2 GiB staging allowance/free-space reserve. This is not a hard total-disk quota.
 
@@ -224,7 +228,7 @@ ruff format --check src tests experiments
 
 Synthetic HTTP tests exercise all authentication modes, XML/JSON, actual fake-process
 ALAC download → three concurrent streams → range seeks, deduplication, cache leases,
-restart metadata, quality fallback refusal, cancellation, sanitized errors and bad
+restart metadata, mixed-format preference fallback, cancellation, sanitized errors and bad
 IDs. Existing full player tests remain required. Runtime lifecycle tests use mocks;
 no proprietary runtime, Apple account or media download is executed by the agent.
 No Supersonic/Feishin real-client or HDMI validation has been performed.

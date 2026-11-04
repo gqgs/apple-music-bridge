@@ -34,7 +34,10 @@ must not go in command arguments or logs. Session tokens are private files, not 
 apple-music-bridge serve --country br --quality lossless
 ```
 
-Use `--quality atmos` for spatial audio. Point your client at `http://127.0.0.1:4533`;
+Use `--quality atmos` to prefer spatial audio, falling back per track to lossless,
+then AAC when a format is unavailable. `--quality lossless` prefers lossless, then
+AAC. Mixed-format playlists do not require restarting the bridge.
+Point your client at `http://127.0.0.1:4533`;
 use the username/key from `~/.config/apple-music-bridge/auth.json` as client
 credentials. Keep that file private. `apple-music-bridge status` checks setup.
 

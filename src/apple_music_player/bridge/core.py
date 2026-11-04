@@ -397,10 +397,11 @@ class Core:
         return self.acquire(self.identity(track), cached_only=True)
 
     def validate_quality(self, media):
-        if self.quality == "lossless" and media.codec not in {"alac", "flac"}:
-            raise BridgeError(0, "Requested lossless but received lossy media; fallback refused")
-        if self.quality == "atmos" and media.codec != "eac3":
-            raise BridgeError(0, "Requested Atmos but received non-E-AC-3 media; fallback refused")
+        allowed = {"alac", "flac", "aac"}
+        if self.quality == "atmos":
+            allowed.add("eac3")
+        if media.codec not in allowed:
+            raise BridgeError(0, "Received a codec outside the requested quality preference")
 
     def release(self, key):
         self.pins[key] -= 1

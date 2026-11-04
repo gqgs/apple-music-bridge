@@ -13,7 +13,7 @@ and the process exit code. Exit zero is never sufficient to accept a download.
 Source review against amdl v0.1.4
 [`452ba0b`](https://github.com/zhaarey/apple-music-downloader/tree/452ba0b672d49afffca3f57b0c2c4670a316e2ca):
 
-- `internal/app/run.go` accepts `--config`, `--json`, `--atmos`; prints a compact
+- `internal/app/run.go` accepts `--config`, `--json`, `--atmos`, `--aac`; prints a compact
   final array with `path`, or `null` when no tracks were added. Several early
   failures return exit zero. The song preamble has no newline.
 - `internal/config/config.go` loads JSON-compatible YAML using nested keys;
@@ -35,6 +35,17 @@ fragmented lines, zero/nonzero exits, nested album output paths and synthetic au
 No proprietary runtime or account is executed. Fixed diagnostic categories separate
 wrapper endpoint/application-code failures from HTTP status, refusal, timeout,
 invalid response and empty result. Only allowlisted endpoints/codes/messages escape.
+
+Per-track fallback recognizes only the exact `Unavailable` result,
+`Failed to dl aac-lc via lite-server: Unavailable`, and
+`Failed to extract info from manifest: no codec found` (with the upstream warning
+prefix). These must have a normal zero exit and no other errors or wrapper warnings.
+The latter means a master playlist was read successfully but lacked a matching
+codec. Other manifest failures are not evidence of format availability. Each
+attempt uses fresh staging; Atmos → lossless → AAC shares one 900-second download
+budget and cancellation event. Lossless → AAC uses the same rules. A returned
+ordinary AC-3 file is discarded and retried as lossless, not mislabeled Atmos.
+Successful upstream AAC fallback is accepted with its actual probed metadata.
 
 `wrapper-m3u8-api-404` means the reached service could not provide a song manifest;
 it does not prove expired login. Use the matching storefront via `serve --country`.

@@ -121,7 +121,12 @@ def main(argv=None):
             command.add_argument("--cache", type=Path)
             command.add_argument("--cache-gib", type=int, default=10)
             command.add_argument("--country", default="br")
-            command.add_argument("--quality", choices=("lossless", "atmos"), default="lossless")
+            command.add_argument(
+                "--quality",
+                choices=("lossless", "atmos"),
+                default="lossless",
+                help="Preferred format: atmos falls back to lossless, then AAC; lossless to AAC",
+            )
             command.add_argument("--port", type=int, default=4533)
             command.add_argument("--diagnostics", action="store_true")
     args = parser.parse_args(argv)

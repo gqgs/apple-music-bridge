@@ -172,6 +172,21 @@ def test_xml_empty_and_invalid_ids(bridge):
     assert payload(server, "search3", {"albumCount": "999999"})["status"] == "failed"
 
 
+def test_lossless_preference_serves_actual_aac_fallback(bridge, audio, monkeypatch):
+    server, count = bridge
+    monkeypatch.setenv("TEST_AUDIO", str(audio["aac"]))
+    server.actor.call("remember", [TRACK])
+    identifier = server.actor.call("identity", TRACK)
+    result = request(server, "stream", {"id": identifier})
+    assert result[0] == 200 and result[2] == audio["aac"].read_bytes()
+    assert result[1]["Content-Type"] == "audio/mp4"
+    assert result[1]["X-Media-Codec"] == "aac"
+    assert result[1]["X-Media-Atmos"] == "unverified"
+    assert result[1]["X-Requested-Quality"] == "lossless"
+    assert result[1]["X-Quality-Fallback"] == "true"
+    assert len(count) == 1
+
+
 def test_private_credentials_and_symlinks(tmp_path):
     path = tmp_path / "private" / "auth.json"
     auth_file(path, True)
@@ -216,10 +231,13 @@ def test_cache_leases_restart_and_quality(tmp_path, audio):
     try:
         assert core.resolve(core.identity(TRACK)) == TRACK
         assert core.cache.get(TRACK.key("lossless"))
+        core.validate_quality(Media("aac"))
         with pytest.raises(BridgeError):
-            core.validate_quality(Media("aac"))
+            core.validate_quality(Media("eac3"))
         core.quality = "atmos"
         core.validate_quality(Media("eac3", atmos=False))
+        core.validate_quality(Media("alac"))
+        core.validate_quality(Media("aac"))
         with pytest.raises(BridgeError):
             core.validate_quality(Media("ac3"))
         assert TRACK.key("lossless") != TRACK.key("atmos")

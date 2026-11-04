@@ -128,27 +128,15 @@ background lookup, restart persistence, and rejection for a different artist ID.
 User sample text suggests this may explain some featured-artist/soundtrack cases,
 but their actual public lookup payloads were not available for live confirmation.
 
-### Headless Qt ownership
+### Headless image codecs
 
-The bridge initializes a QCoreApplication on the process main thread before its
-workers and retains it through process shutdown. It does not create a window,
-require a display server, or suppress Qt warnings. QBuffer/QImageReader instances
-remain local to each decoding call. Qt documents QImageReader as reentrant and
-recommends a QCoreApplication for non-GUI Qt programs:
-https://doc.qt.io/qt-6/qimagereader.html
-https://doc.qt.io/qt-6/qcoreapplication.html
-
-Qt's [QFactoryLoader::instance implementation](https://github.com/qt/qtbase/blob/v6.12.0/src/corelib/plugin/qfactoryloader.cpp#L501)
-moves parentless plugin instances to Qt's main thread. A stable main-thread
-application is therefore important even though our individual buffers/readers
-are created and used within a single worker.
-
-A fresh-process test reproduces moveToThread warnings when successive short-lived
-worker pools decode PNG/JPEG/WebP without an application object. The same workload
-through bridge initialization emits no warnings, including with an existing core
-application and with no usable GUI platform. Decoding succeeded in the original
-reproduction; the warnings demonstrate invalid thread affinity, not proven media
-corruption or a cause of catalog rate limits.
+Pillow replaces Qt image plugins. Each bounded worker owns its input stream and
+fully decodes a PNG/JPEG/WebP image before returning a detached RGBA image.
+Dimensions (2048px per axis) and input bytes (2 MiB) remain bounded; output is PNG.
+Other parsers are excluded explicitly. No display server, QCoreApplication or
+Qt thread/plugin ownership is required. Successive worker-pool tests cover all
+three input formats and malformed/oversized inputs. Existing raw-image disk cache
+keys and contents remain compatible; no cache purge is required.
 
 
 ### Cold grid progress and interactive priority

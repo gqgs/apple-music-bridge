@@ -1,9 +1,6 @@
-import os
 import subprocess
 
 import pytest
-
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 
 @pytest.fixture(scope="session")
@@ -65,41 +62,6 @@ print(json.dumps([{"path": str(output), "song": "TEST_SECRET_DO_NOT_LEAK"}]))
     return str(path)
 
 
-@pytest.fixture
-def fake_mpv(tmp_path):
-    path = tmp_path / "fake-mpv"
-    path.write_text("""#!/usr/bin/env python3
-import json, socket, sys, os
-address = next(a.split("=", 1)[1] for a in sys.argv if a.startswith("--input-ipc-server="))
-sock = socket.socket(socket.AF_UNIX)
-sock.bind(address)
-sock.listen(1)
-conn, _ = sock.accept()
-props = {"pause": True, "time-pos": 0, "duration": 1,
-         "audio-params": {"format": os.environ.get("TEST_MPV_FORMAT", "s16")},
-         "audio-out-params": {"format": os.environ.get("TEST_MPV_FORMAT", "s16")}}
-def send(data):
-    conn.sendall(json.dumps(data).encode() + b"\\n")
-with conn.makefile("rb") as f:
-    for line in f:
-        command = json.loads(line)["command"]
-        if command[0] == "observe_property":
-            name = command[2]
-            send({"event": "property-change", "name": name, "data": props[name]})
-        elif command[:2] == ["set_property", "pause"]:
-            props["pause"] = command[2]
-            send({"event": "property-change", "name": "pause", "data": command[2]})
-        elif command[:2] == ["cycle", "pause"]:
-            props["pause"] = not props["pause"]
-            send({"event": "property-change", "name": "pause", "data": props["pause"]})
-        elif command[0] == "seek":
-            send({"event": "property-change", "name": "time-pos", "data": command[1]})
-        send({"error": "success"})
-""")
-    path.chmod(0o755)
-    return str(path)
-
-
 def wait_until(callback, timeout=8):
     import time
 
@@ -109,30 +71,3 @@ def wait_until(callback, timeout=8):
             return
         time.sleep(0.02)
     pytest.fail("Timed out waiting for test process")
-
-
-@pytest.fixture(scope="session")
-def app():
-    from PySide6.QtWidgets import QApplication
-
-    app = QApplication.instance() or QApplication([])
-    yield app
-
-
-@pytest.fixture(autouse=True)
-def dispose_closed_qt_windows():
-    """Destroy test windows on the GUI thread, not a later worker's GC pass."""
-    yield
-    from PySide6.QtCore import QCoreApplication, QEvent
-    from PySide6.QtWidgets import QApplication
-
-    from apple_music_player.app import Window
-
-    application = QApplication.instance()
-    if application:
-        for widget in application.topLevelWidgets():
-            if isinstance(widget, Window):
-                widget.close()
-                widget.deleteLater()
-        QCoreApplication.sendPostedEvents(None, QEvent.DeferredDelete)
-        application.processEvents()

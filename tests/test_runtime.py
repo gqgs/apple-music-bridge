@@ -13,11 +13,8 @@ import pytest
 from conftest import wait_until
 
 from apple_music_player.backend_pins import RuntimePin
-from apple_music_player.cache import Cache
-from apple_music_player.controller import Controller
 from apple_music_player.downloader import Downloader, lite_job_config
 from apple_music_player.model import PlayerError, Track
-from apple_music_player.playback import Mpv
 from apple_music_player.runtime import ManagedRuntime, RuntimeEvents, health_status, memory_args
 from apple_music_player.runtime_install import REQUIRED, RuntimeStore, extract_runtime
 
@@ -301,46 +298,6 @@ def test_health_schema_never_authentication(monkeypatch):
     assert health_status() is False
 
 
-def test_lite_contract_and_missing_service(tmp_path, audio, monkeypatch):
-    binary = tmp_path / "fake-lite-downloader"
-    binary.write_text("""#!/usr/bin/env python3
-import json, os, pathlib, shutil, sys
-assert "--config" in sys.argv and "--json" in sys.argv
-config = json.loads(pathlib.Path(sys.argv[sys.argv.index("--config") + 1]).read_text())
-assert config["general"]["lite-server"] == "http://127.0.0.1:12340"
-assert config["general"]["exit-on-error"]
-assert not config["metadata"]["lyrics"]["embed"]
-assert not config["metadata"]["artwork"]["embed"]
-assert not config["convert"]["after-download"]
-path = pathlib.Path(config["paths"]["alac"]) / "67890" / "12345.m4a"
-path.parent.mkdir()
-shutil.copyfile(os.environ["TEST_AUDIO"], path)
-print("Warning: failed to query lite-server /status: fixture-secret", file=sys.stderr)
-print("Queue 1 of 1: Song->Album")
-print(json.dumps([{"path": str(path), "artist": "Fixture", "artist_id": "42",
-                   "album": "Fixture album", "song": "ignored"}]))
-""")
-    binary.chmod(0o700)
-    monkeypatch.setenv("TEST_AUDIO", str(audio["alac"]))
-    stage = tmp_path / "stage"
-    stage.mkdir()
-    job, source, media = Downloader(str(binary), stage, backend="lite").run(
-        Track("us", "12345", "Fixture"), "lossless", threading.Event()
-    )
-    assert "Lossless" in media.label and source.exists()
-    shutil.rmtree(job)
-    config = lite_job_config(stage, "gb")
-    assert "alac-save-folder" not in config
-    cache = Cache(tmp_path / "cache", 1000)
-    c = Controller(cache, Mpv(), "unused-executable")
-    c.backend = "lite"
-    c.add(Track("us", "12345", "Fixture"), "lossless")
-    c.tick()
-    assert "Backend setup" in c.error and c.downloader == "unused-executable"
-    assert c.future is None
-    c.close()
-
-
 def test_no_plaintext_fallback_when_memfd_unavailable(installed, monkeypatch):
     runtime = ManagedRuntime(installed)
     original = runtime.data / "original"
@@ -405,88 +362,6 @@ time.sleep(120)
             parent.wait()
 
 
-def test_lite_health_loss_cancels_only_active_download(tmp_path):
-    from concurrent.futures import Future
-
-    cache = Cache(tmp_path / "cache", 1000)
-    c = Controller(cache, Mpv())
-    c.backend = "lite"
-    c.runtime = Mock(ready=False, regions=())
-    c.add(Track("us", "12345", "Fixture"), "lossless")
-    c.job = c.queue[0]
-    c.job.state = "Downloading"
-    c.cancel = threading.Event()
-    c.future = Future()
-    c.tick()
-    assert c.cancel.is_set()
-    c.future.set_exception(PlayerError("Download cancelled."))
-    c.tick()
-    assert c.queue[0].state.startswith("Cancelled")
-    c.close()
-
-
-def test_two_factor_dialog_submits_while_polling(app, installed, tmp_path):
-    from apple_music_player.app import Window
-    from apple_music_player.setup_ui import SetupDialog, SetupService
-
-    window = Window(tmp_path / "cache")
-    service = SetupService(window, tmp_path / "unused-runtime")
-    service.runtime.close()
-    service.runtime = ManagedRuntime(installed)
-    dialog = SetupDialog(service, window.controller, window)
-    dialog.show()
-    dialog.username.setText("fixture-user")
-    dialog.password.setText("fixture-secret")
-    dialog.login_button.click()
-
-    def pump():
-        app.processEvents()
-        # Deliberately schedule the next poll before refreshing, as the real timer
-        # does. The old bool(future) gate could never enable the button here.
-        service.tick()
-        dialog.refresh()
-
-    release = threading.Event()
-    try:
-        wait_until(lambda: (pump(), service.runtime.can_submit_code)[1])
-        assert service.runtime.fifo.is_fifo() and service.runtime.fifo_fd is not None
-        assert not dialog.code_button.isEnabled()
-        dialog.code.setText("12ab56")
-        assert not dialog.code_button.isEnabled()
-        dialog.code.setText("123456")
-        wait_until(lambda: (pump(), dialog.code_button.isEnabled())[1])
-        assert service.future is not None and service.active_kind == "poll"
-
-        entered = threading.Event()
-        original_poll = service.runtime.poll
-
-        def delayed_poll():
-            entered.set()
-            assert release.wait(5)
-            original_poll()
-
-        service.runtime.poll = delayed_poll
-        wait_until(lambda: (pump(), entered.is_set())[1])
-        dialog.refresh()
-        assert dialog.code_button.isEnabled()  # An unfinished poll is not a user action.
-        dialog.code_button.click()
-        assert service.active_kind == "submit_code" and service.busy
-        assert dialog.code.text() == "" and not dialog.code_button.isEnabled()
-        dialog.code.setText("654321")
-        assert not dialog.code_button.isEnabled()  # No second queued code.
-        release.set()
-        wait_until(lambda: (pump(), service.runtime.process is None)[1])
-        assert service.runtime.signed_in()
-        assert not service.runtime.can_submit_code and not dialog.code_button.isEnabled()
-        assert not service.runtime.fifo.exists() and service.runtime.fifo_fd is None
-    finally:
-        release.set()
-        dialog.close()
-        service.close()
-        window.close()
-        app.processEvents()
-
-
 def test_prompt_does_not_publish_readiness_before_fifo_or_after_cancel(installed):
     runtime = ManagedRuntime(installed)
     runtime.process = Mock()
@@ -531,39 +406,6 @@ def test_fragmented_upstream_prompt_is_received_without_pipe_eof():
     finally:
         os.close(write_fd)
         reader.join(timeout=2)
-
-
-def test_closing_setup_preserves_service_and_polling(app, installed, tmp_path, monkeypatch):
-    from apple_music_player.app import Window
-    from apple_music_player.setup_ui import SetupDialog, SetupService
-
-    window = Window(tmp_path / "cache")
-    service = SetupService(window, tmp_path / "unused-runtime")
-    service.runtime.close()
-    service.runtime = ManagedRuntime(installed)
-    runtime = service.runtime
-    for name in (".player-login-ok", "DEV_TOKEN", "MUSIC_TOKEN", "STOREFRONT_ID"):
-        (runtime.data / name).write_text("synthetic-session")
-    monkeypatch.setattr("apple_music_player.runtime.health_details", lambda: (True, ("us",)))
-    dialog = SetupDialog(service, window.controller, window)
-    try:
-        runtime.start()
-        wait_until(lambda: (runtime.poll(), runtime.ready)[1])
-        process = runtime.process
-        dialog.show()
-        dialog.accept()
-        app.processEvents()
-        assert service.timer.isActive()
-        assert not runtime.cancel.is_set()
-        service.tick()
-        wait_until(lambda: service.future.done())
-        service.finish_completed()
-        assert runtime.process is process and process.poll() is None
-        assert runtime.ready and runtime.signed_in()
-        assert "media access not yet verified" in runtime.state
-    finally:
-        service.close()
-        window.close()
 
 
 def test_repeated_start_stop_releases_port_stream_and_inherited_lock(installed, monkeypatch):
@@ -618,99 +460,6 @@ def test_preflight_allows_time_wait_but_not_live_owner(installed):
     runtime._preflight()
 
 
-def test_stop_is_durable_while_poll_finishes(app, installed, tmp_path):
-    from apple_music_player.setup_ui import SetupService
-
-    service = SetupService(root=tmp_path / "unused-runtime")
-    service.runtime.close()
-    service.runtime = ManagedRuntime(installed)
-    entered, release = threading.Event(), threading.Event()
-
-    def old_poll():
-        entered.set()
-        assert release.wait(5)
-
-    service.active_kind = "poll"
-    service.future = service.pool.submit(old_poll)
-    try:
-        assert entered.wait(5)
-        service.request_stop()
-        assert service.busy and service.stop_requested
-        assert not service.dispatch(service.runtime.start)
-        assert service.runtime.cancel.is_set()
-        release.set()
-        wait_until(lambda: (service.tick(), not service.stop_requested)[1])
-        assert service.runtime.state == "Stopped" and service.runtime.process is None
-        assert service.runtime.cancel.is_set()
-    finally:
-        release.set()
-        service.close()
-
-
-@pytest.mark.parametrize("backend,saved", [("lite", True), ("lite", False), ("classic", True)])
-def test_window_autostarts_only_saved_managed_once(
-    app, installed, tmp_path, monkeypatch, backend, saved
-):
-    import json
-
-    from apple_music_player.app import Window
-
-    monkeypatch.setattr("apple_music_player.setup_ui.RuntimeStore", lambda root: installed)
-    monkeypatch.setattr("apple_music_player.runtime.health_details", lambda: (True, ("us",)))
-    if saved:
-        data = installed.current / "rootfs/data"
-        for name in (".player-login-ok", "DEV_TOKEN", "MUSIC_TOKEN", "STOREFRONT_ID"):
-            (data / name).write_text("synthetic-session")
-    cache = tmp_path / "cache"
-    cache.mkdir()
-    (cache / "settings.json").write_text(json.dumps({"backend": backend}))
-    window = Window(cache)
-    try:
-        app.processEvents()
-        if backend == "classic":
-            assert window.setup_service is None
-            return
-        service = window.setup_service
-        assert service is not None
-        if not saved:
-            assert service.runtime.process is None and service.future is None
-            assert "Setup incomplete" in service.runtime.state
-            return
-        wait_until(lambda: (service.tick(), service.runtime.ready)[1])
-        process = service.runtime.process
-        window.tick()
-        assert "Service reachable" in window.backend_status.text()
-        service.request_stop()
-        wait_until(lambda: (service.tick(), not service.stop_requested)[1])
-        assert process.poll() is not None
-        window.start_saved_backend()
-        window.tick()
-        app.processEvents()
-        assert service.runtime.process is None  # Stop is respected for this session.
-        assert "Stopped" in window.backend_status.text()
-    finally:
-        window.close()
-        app.processEvents()
-
-
-def test_queue_waits_for_managed_startup_but_not_explicit_stop(installed, tmp_path):
-    runtime = ManagedRuntime(installed)
-    runtime.starting = True
-    controller = Controller(Cache(tmp_path / "cache", 1000), Mpv(), "unused")
-    controller.backend = "lite"
-    controller.runtime = runtime
-    controller.add(Track("us", "12345", "Fixture"), "lossless")
-    try:
-        controller.tick()
-        assert controller.queue[0].state == "Queued" and controller.future is None
-        runtime.cancel.set()
-        controller.tick()
-        assert controller.queue[0].state == "Failed" and controller.future is None
-    finally:
-        controller.close()
-        runtime.close()
-
-
 def test_health_region_allowlist(monkeypatch):
     from apple_music_player.runtime import health_details
 
@@ -722,23 +471,33 @@ def test_health_region_allowlist(monkeypatch):
     assert health_details() == (True, ("br",))
 
 
-def test_old_us_queue_cannot_download_after_br_backend_ready(installed, tmp_path):
-    runtime = ManagedRuntime(installed)
-    controller = Controller(Cache(tmp_path / "cache", 1000), Mpv(), "unused")
-    controller.add(Track("us", "12345", "Smother — Daughter"), "lossless")
-    controller.backend = "lite"
-    controller.runtime = runtime
-    runtime.regions = ("br",)
-    runtime.ready = True
-    try:
-        controller.tick()
-        assert controller.future is None
-        assert controller.queue[0].state == "Failed — storefront mismatch"
-        assert controller.queue[0].track.country == "us"  # Never silently rewrite IDs.
-        controller.retry()
-        controller.tick()
-        assert controller.future is None
-        assert "managed backend reports BR" in controller.error
-    finally:
-        controller.close()
-        runtime.close()
+def test_lite_contract_and_nested_output(tmp_path, audio, monkeypatch):
+    binary = tmp_path / "fake-lite-downloader"
+    binary.write_text("""#!/usr/bin/env python3
+import json, os, pathlib, shutil, sys
+assert "--config" in sys.argv and "--json" in sys.argv
+config = json.loads(pathlib.Path(sys.argv[sys.argv.index("--config") + 1]).read_text())
+assert config["general"]["lite-server"] == "http://127.0.0.1:12340"
+assert config["general"]["exit-on-error"]
+assert not config["metadata"]["lyrics"]["embed"]
+assert not config["metadata"]["artwork"]["embed"]
+assert not config["convert"]["after-download"]
+path = pathlib.Path(config["paths"]["alac"]) / "67890" / "12345.m4a"
+path.parent.mkdir()
+shutil.copyfile(os.environ["TEST_AUDIO"], path)
+print("Warning: failed to query lite-server /status: fixture-secret", file=sys.stderr)
+print("Queue 1 of 1: Song->Album")
+print(json.dumps([{"path": str(path), "artist": "Fixture", "artist_id": "42",
+                   "album": "Fixture album", "song": "ignored"}]))
+""")
+    binary.chmod(0o700)
+    monkeypatch.setenv("TEST_AUDIO", str(audio["alac"]))
+    stage = tmp_path / "stage"
+    stage.mkdir()
+    job, source, media = Downloader(str(binary), stage, backend="lite").run(
+        Track("us", "12345", "Fixture"), "lossless", threading.Event()
+    )
+    assert "Lossless" in media.label and source.exists()
+    shutil.rmtree(job)
+    config = lite_job_config(stage, "gb")
+    assert "alac-save-folder" not in config

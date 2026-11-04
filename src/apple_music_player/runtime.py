@@ -123,8 +123,19 @@ def health_status():
     return health_details()[0]
 
 
+def session_saved(store):
+    try:
+        for name in (".player-login-ok", "DEV_TOKEN", "MUSIC_TOKEN", "STOREFRONT_ID"):
+            path = safe_path(store.root, store.current / "rootfs" / "data" / name)
+            if not path.is_file() or not 0 < path.stat().st_size < 65536:
+                return False
+        return True
+    except (PlayerError, OSError):
+        return False
+
+
 class ManagedRuntime:
-    """Methods are serialized by the setup worker; cancel is a thread-safe event."""
+    """Methods are serialized by their owner; cancel is a thread-safe event."""
 
     def __init__(self, store):
         self.store = store
@@ -167,14 +178,7 @@ class ManagedRuntime:
         self.fifo.unlink(missing_ok=True)
 
     def signed_in(self):
-        try:
-            for name in (".player-login-ok", "DEV_TOKEN", "MUSIC_TOKEN", "STOREFRONT_ID"):
-                path = safe_path(self.store.root, self.data / name)
-                if not path.is_file() or not 0 < path.stat().st_size < 65536:
-                    return False
-            return True
-        except (PlayerError, OSError):
-            return False
+        return session_saved(self.store)
 
     def _preflight(self):
         if self.cancel.is_set():

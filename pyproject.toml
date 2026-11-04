@@ -3,17 +3,17 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "apple-music-player"
+name = "apple-music-bridge"
 version = "0.1.0"
-description = "A small native Linux frontend for external Apple Music download and playback tools"
+description = "A local OpenSubsonic bridge for Apple Music"
 requires-python = ">=3.11"
-dependencies = ["PySide6>=6.8,<7"]
+dependencies = ["Pillow>=11.3,<14"]
 
 [project.optional-dependencies]
 dev = ["pytest>=8", "ruff>=0.9"]
 
 [project.scripts]
-apple-music-player = "apple_music_player.app:main"
+apple-music-bridge = "apple_music_player.cli:main"
 
 [tool.setuptools.package-data]
 apple_music_player = ["assets/*.svg"]

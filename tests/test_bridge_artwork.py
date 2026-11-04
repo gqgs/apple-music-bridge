@@ -7,12 +7,10 @@ from hashlib import sha256
 from types import SimpleNamespace
 
 import pytest
-from PySide6.QtCore import QBuffer, QIODevice
-from PySide6.QtGui import QImage
 from test_bridge import ALBUM, ARTIST, TRACK, payload, request
 from test_bridge import bridge as _bridge
 
-from apple_music_player.artwork import MAX_BYTES, ArtworkRedirect
+from apple_music_player.artwork import MAX_BYTES, ArtworkRedirect, decode
 from apple_music_player.bridge.artwork import Covers, CoverUnavailable
 
 bridge = _bridge
@@ -21,12 +19,11 @@ URL = "https://is1-ssl.mzstatic.com/image/thumb/fixture/100x100bb.jpg"
 
 
 def image_bytes(fmt="PNG", width=100):
-    image = QImage(width, 10, QImage.Format_RGB32)
-    image.fill(0xFF336699)
-    buffer = QBuffer()
-    buffer.open(QIODevice.WriteOnly)
-    assert image.save(buffer, fmt)
-    return bytes(buffer.data())
+    from PIL import Image
+
+    data = io.BytesIO()
+    Image.new("RGB", (width, 10), "#336699").save(data, format=fmt)
+    return data.getvalue()
 
 
 def transport(monkeypatch, data, mime="image/jpeg", final=URL):
@@ -52,7 +49,7 @@ def test_decodes_actual_bytes_normalizes_png_and_caches(tmp_path, monkeypatch, f
     covers = Covers(tmp_path / "art")
     try:
         first = covers.get(URL, 100)
-        assert first.startswith(b"\x89PNG") and not QImage.fromData(first).isNull()
+        assert first.startswith(b"\x89PNG") and decode(first) is not None
         assert covers.get(URL, 100) == first
         assert calls == [(URL, 8)]  # No speculative resizing or format suffix rewrite.
     finally:
@@ -124,7 +121,7 @@ def test_http_song_album_artist_auth_and_mime(bridge, monkeypatch):
         )
         assert response[1]["Content-Type"] == "image/png"
         assert response[1]["X-Artwork-Status"] == "available"
-        assert not QImage.fromData(response[2]).isNull()
+        assert decode(response[2]) is not None
     assert len(calls) == 1
     artist = request(server, "getCoverArt", {"id": "am:br:lossless:artist:1"})
     assert artist[1]["X-Artwork-Status"] == "placeholder"
@@ -248,10 +245,10 @@ def test_higher_resolution_and_client_size(tmp_path, monkeypatch):
     )
     covers = Covers(tmp_path / "art")
     try:
-        image = QImage.fromData(covers.get(URL, 600))
-        assert image.width() == 600  # No inherited 256px decoder ceiling.
+        image = decode(covers.get(URL, 600), 2048)
+        assert image.width == 600  # No inherited 256px decoder ceiling.
         assert calls == [(URL.replace("100x100", "1024x1024"), 8)]
-        assert QImage.fromData(covers.get(URL, 5000)).width() == 1024
+        assert decode(covers.get(URL, 5000), 2048).width == 1024
         assert len(calls) == 1
     finally:
         covers.close()
@@ -273,8 +270,8 @@ def test_bad_variant_falls_back_to_original_and_is_not_retried(tmp_path, monkeyp
     )
     covers = Covers(tmp_path / "art")
     try:
-        assert QImage.fromData(covers.get(URL)).width() == 100  # Never upscale fallback.
-        assert QImage.fromData(covers.get(URL)).width() == 100
+        assert decode(covers.get(URL)).width == 100  # Never upscale fallback.
+        assert decode(covers.get(URL)).width == 100
         assert calls == [URL.replace("100x100", "400x400"), URL]
     finally:
         covers.close()
@@ -300,7 +297,7 @@ def test_http_requested_cover_size(bridge, monkeypatch):
     server.actor.call("remember", [replace(ALBUM, artwork_url=URL)])
     calls = transport(monkeypatch, image_bytes(width=512))
     response = request(server, "getCoverArt", {"id": "am:br:lossless:album:2", "size": "400"})
-    assert QImage.fromData(response[2]).width() == 400
+    assert decode(response[2], 2048).width == 400
     assert calls == [(URL.replace("100x100", "400x400"), 8)]
     assert (
         payload(server, "getCoverArt", {"id": "am:br:lossless:album:2", "size": "-1"})["status"]
@@ -424,7 +421,7 @@ def test_album_success_has_one_cache_policy_and_needs_no_client_retry(bridge, mo
     for _ in range(4):
         status, headers, body = raw_cover_response(server, "am:br:lossless:album:2")
         responses.append(status)
-        assert status == 200 and not QImage.fromData(body).isNull()
+        assert status == 200 and decode(body) is not None
         if "no-store" not in headers.get("Cache-Control", ""):
             break
     assert responses == [200]
@@ -459,3 +456,25 @@ def test_cover_protocol_errors_never_look_like_successful_images(
     assert actual == status and headers["X-Artwork-Reason"] == reason
     assert headers["Cache-Control"] == "no-store"
     assert headers["Content-Type"].startswith("application/xml") and b"<error " in body
+
+
+def test_normalized_png_can_exceed_source_byte_cap(tmp_path, monkeypatch):
+    import random
+
+    from PIL import Image
+
+    # Valid small JPEG expands to >2 MiB PNG after decoding; source limit still applies.
+    source = Image.frombytes("RGB", (1024, 1024), random.Random(7).randbytes(1024 * 1024 * 3))
+    stream = io.BytesIO()
+    source.save(stream, format="JPEG", quality=95)
+    assert len(stream.getvalue()) < MAX_BYTES
+    transport(monkeypatch, stream.getvalue())
+    covers = Covers(tmp_path)
+    try:
+        output = covers.get(URL, 1024)
+        assert len(output) > MAX_BYTES
+        with Image.open(io.BytesIO(output)) as image:
+            image.load()
+            assert image.size == (1024, 1024) and image.format == "PNG"
+    finally:
+        covers.close()

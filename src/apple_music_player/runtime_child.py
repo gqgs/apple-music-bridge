@@ -1,4 +1,4 @@
-"""Keep the rootless process group scoped to the desktop player's lifetime."""
+"""Keep the rootless process group scoped to the owning bridge process lifetime."""
 
 import os
 import signal

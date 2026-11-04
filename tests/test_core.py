@@ -7,10 +7,8 @@ import pytest
 from conftest import wait_until
 
 from apple_music_player.cache import Cache, safe_path
-from apple_music_player.controller import Controller
 from apple_music_player.downloader import Downloader, Summary, probe
 from apple_music_player.model import Media, PlayerError, Track, parse_url
-from apple_music_player.playback import Mpv
 
 TRACK = Track("us", "12345", "Synthetic test track")
 
@@ -183,60 +181,6 @@ def test_url_canonicalization():
             parse_url(value)
 
 
-def test_queue_download_play_dedup_prefetch(tmp_path, fake_downloader, fake_mpv):
-    cache = Cache(tmp_path / "cache", 1_000_000)
-    player = Mpv(fake_mpv)
-    c = Controller(cache, player, fake_downloader)
-    from types import SimpleNamespace
-
-    c.runtime = SimpleNamespace(ready=True, store=SimpleNamespace(downloader=fake_downloader))
-    c.add(TRACK, "lossless")
-    c.add(TRACK, "lossless")
-    c.add(Track("us", "2", "Next"), "lossless")
-    c.add(Track("us", "3", "Later"), "lossless")
-    assert len(c.queue) == 3
-
-    def ready():
-        c.tick()
-        return c.queue[0].state == "Playing" and c.queue[1].state == "Ready"
-
-    try:
-        wait_until(ready)
-        assert c.media.codec == "alac" and c.queue[2].state == "Queued"
-        assert "PCM" in player.output_label
-        player.command("cycle", "pause")
-        wait_until(lambda: (c.tick(), c.queue[0].state == "Paused")[1])
-        player.command("seek", 0.5, "absolute")
-        wait_until(lambda: (c.tick(), player.properties.get("time-pos") == 0.5)[1])
-        c.next()
-        wait_until(lambda: (c.tick(), c.current is c.queue[0])[1])
-    finally:
-        c.close()
-
-
-def test_passthrough_fallback_stops(tmp_path, audio, fake_mpv):
-    player = Mpv(fake_mpv)
-    with pytest.raises(PlayerError, match="HDMI"):
-        player.start(audio["eac3"], Media("eac3"), "auto")
-    player.start(audio["eac3"], Media("eac3"), "alsa/hdmi:CARD=TEST,DEV=0")
-    try:
-        with pytest.raises(PlayerError, match="fell back"):
-            wait_until(lambda: (player.poll(), player.output_verified)[1])
-    finally:
-        player.close()
-
-
-def test_passthrough_truthful_label(audio, fake_mpv, monkeypatch):
-    monkeypatch.setenv("TEST_MPV_FORMAT", "spdif-eac3")
-    player = Mpv(fake_mpv)
-    player.start(audio["eac3"], Media("eac3"), "alsa/hdmi:CARD=TEST,DEV=0")
-    try:
-        wait_until(lambda: (player.poll(), player.output_verified)[1])
-        assert "receiver Atmos indication not verified" in player.output_label
-    finally:
-        player.close()
-
-
 def test_store_disk_full_keeps_existing_cache(tmp_path, monkeypatch):
     import errno
     import os
@@ -252,127 +196,3 @@ def test_store_disk_full_keeps_existing_cache(tmp_path, monkeypatch):
         add_file(cache, Track("us", "2", "Next"))
     assert cache.get(key) and cache.usage == 4
     cache.close()
-
-
-def test_cancel_retry_and_removed_job_not_committed(
-    tmp_path, fake_downloader, fake_mpv, monkeypatch
-):
-    cache = Cache(tmp_path / "cache", 1_000_000)
-    controller = Controller(cache, Mpv(fake_mpv), fake_downloader)
-    from types import SimpleNamespace
-
-    controller.runtime = SimpleNamespace(
-        ready=True, store=SimpleNamespace(downloader=fake_downloader)
-    )
-    monkeypatch.setenv("TEST_MODE", "hang")
-    pidfile = tmp_path / "pid"
-    monkeypatch.setenv("TEST_PID", str(pidfile))
-    controller.add(TRACK, "lossless")
-    controller.tick()
-    wait_until(pidfile.exists)
-    controller.cancel_download()
-    wait_until(lambda: (controller.tick(), controller.future is None)[1])
-    assert controller.queue[0].state.startswith("Cancelled")
-    assert cache.get(TRACK.key("lossless")) is None
-    monkeypatch.setenv("TEST_MODE", "ok")
-    controller.retry()
-    wait_until(lambda: (controller.tick(), controller.current is not None)[1])
-    controller.next()
-    assert not controller.queue
-    assert not controller.player.process
-    controller.close()
-
-
-@pytest.mark.parametrize("name", ["audio-params", "audio-out-params"])
-@pytest.mark.parametrize("paused", [False, True])
-def test_output_changes_revoke_and_restore_without_resume(name, paused):
-    import json
-    import time
-    from unittest.mock import Mock
-
-    player = Mpv()
-    player.process = Mock()
-    player.process.poll.return_value = None
-    player.socket = Mock()
-    player.socket.recv.side_effect = TimeoutError
-    player.started = time.monotonic()
-    player.passthrough = True
-    player.command = Mock()
-
-    def emit(prop, data):
-        player.buffer += (
-            json.dumps({"event": "property-change", "name": prop, "data": data}).encode() + b"\n"
-        )
-        player.poll()
-
-    emit("audio-params", {"format": "spdif-eac3"})
-    assert not player.output_verified
-    emit("audio-out-params", {"format": "spdif-eac3"})
-    assert player.output_verified
-    player.command.assert_called_once_with("set_property", "pause", False)
-    emit("pause", paused)
-    player.command.reset_mock()
-
-    # Valid updates after startup must not override the user's pause state.
-    emit(name, {"format": "spdif-eac3", "samplerate": 192000})
-    player.command.assert_not_called()
-    assert player.properties["pause"] is paused
-
-    emit(name, None)
-    assert not player.output_verified
-    assert "passthrough active" not in player.output_label
-    assert "unavailable" in player.output_label
-    player.command.assert_called_once_with("set_property", "pause", True)
-    emit("pause", True)
-    player.command.reset_mock()
-
-    # Repeated missing updates remain paused; restored params re-enable controls,
-    # but only an explicit user action may resume after this interruption.
-    emit(name, None)
-    emit(name, {"format": "spdif-eac3"})
-    assert player.output_verified and player.properties["pause"] is True
-    assert "passthrough active" in player.output_label
-    player.command.assert_not_called()
-
-    emit("pause", paused)
-    with pytest.raises(PlayerError, match="fell back"):
-        emit(name, {"format": "s16"})
-    assert not player.output_verified
-    assert "passthrough active" not in player.output_label
-    player.command.assert_called_once_with("set_property", "pause", True)
-
-
-def test_play_album_replaces_playing_and_cancels_prefetch_latest_wins(
-    tmp_path, audio, fake_downloader, fake_mpv, monkeypatch
-):
-    import shutil
-    from types import SimpleNamespace
-
-    cache = Cache(tmp_path / "cache", 1_000_000)
-    source = cache.staging / "old.m4a"
-    shutil.copyfile(audio["alac"], source)
-    cache.put(TRACK.key("lossless"), source, Media("alac", 44100, 16, 1))
-    c = Controller(cache, Mpv(fake_mpv))
-    c.runtime = SimpleNamespace(ready=True, store=SimpleNamespace(downloader=fake_downloader))
-    pidfile = tmp_path / "prefetch-pid"
-    monkeypatch.setenv("TEST_PID", str(pidfile))
-    monkeypatch.setenv("TEST_MODE", "hang")
-    c.add(TRACK, "lossless")
-    c.add(Track("us", "20", "Old prefetch"), "lossless")
-    try:
-        wait_until(lambda: (c.tick(), pidfile.exists() and c.current is not None)[1])
-        old_future = c.future
-        assert not c.play_album([], "lossless") and c.current is not None
-        c.play_album([Track("us", "30", "Superseded")], "lossless")
-        latest = [Track("us", "40", "First"), Track("us", "41", "Second")]
-        c.play_album(latest + [latest[0]], "lossless")
-        assert c.future is old_future and c.cancel.is_set()
-        assert c.current is None and [e.track.id for e in c.queue] == ["40", "41"]
-        monkeypatch.setenv("TEST_MODE", "ok")
-        wait_until(lambda: (c.tick(), c.current is not None and c.current.state == "Playing")[1])
-        assert c.current.track.id == "40" and not c.error
-        assert cache.get(TRACK.key("lossless"))  # Replacement does not delete existing cache.
-        assert cache.get(Track("us", "20", "").key("lossless")) is None
-        assert cache.get(Track("us", "30", "").key("lossless")) is None
-    finally:
-        c.close()

@@ -7,10 +7,9 @@ from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor, TimeoutError
 from urllib.parse import urlsplit, urlunsplit
 
-from PySide6.QtCore import QBuffer, QIODevice, Qt
-from PySide6.QtGui import QImage
+from PIL import Image
 
-from ..artwork import BADGE_URL, ArtworkCache, allowed_url
+from ..artwork import BADGE_URL, ArtworkCache, allowed_url, decode, png
 from .metrics import Metrics
 
 
@@ -26,12 +25,6 @@ def sized_url(url, size):
     if int(match[2]) >= size:
         return url
     return urlunsplit(parts._replace(path=f"{match[1]}{bucket}x{bucket}{match[3]}"))
-
-
-def png(image):
-    buffer = QBuffer()
-    buffer.open(QIODevice.WriteOnly)
-    return bytes(buffer.data()) if image.save(buffer, "PNG") else b""
 
 
 class CoverUnavailable(Exception):
@@ -60,10 +53,10 @@ class Covers:
         image = self.cache.load(url)
         self.metrics.record(
             "cover_fetch",
-            self.cache.failures.get(url, "unavailable") if image.isNull() else "ok",
+            self.cache.failures.get(url, "unavailable") if image is None else "ok",
             time.monotonic() - start,
         )
-        return b"" if image.isNull() else png(image)
+        return b"" if image is None else png(image)
 
     def finished(self, url, future):
         try:
@@ -103,9 +96,11 @@ class Covers:
                 if candidate == url or time.monotonic() >= deadline:
                     raise
                 data = self._get(url, deadline, background=background)
-            image = QImage.fromData(data)
-            if max(image.width(), image.height()) > size:
-                data = png(image.scaled(size, size, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+            # Internally normalized 1024px RGBA PNG may exceed the 2 MiB input cap.
+            image = decode(data, 1024, max_bytes=5 * 1024**2)
+            if max(image.size) > size:
+                image.thumbnail((size, size), Image.Resampling.LANCZOS)
+                data = png(image)
             self.metrics.record("cover_wait", "ok", time.monotonic() - start)
             return data
         except CoverUnavailable:
@@ -117,7 +112,7 @@ class Covers:
             raise CoverUnavailable()
         # Warm disk hits don't consume a network worker or pending admission slot.
         image = self.cache.load(url, cache_only=True)
-        if not image.isNull():
+        if image is not None:
             self.metrics.record("cover_cache", "hit")
             return png(image)
         self.metrics.record("cover_cache", "miss")

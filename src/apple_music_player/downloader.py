@@ -25,9 +25,9 @@ DIAGNOSTICS = {
     "catalog-403": "Catalog access was denied (403). Check network and storefront restrictions.",
     "catalog-404": "Song or album was not found (404). Try its Apple Music URL in your storefront.",
     "catalog-429": "Catalog rate limit reached (429). Wait before retrying.",
-    "wrapper": "Downloader could not use the local lite API. Check Backend setup status.",
+    "wrapper": "Downloader could not use the local lite API. Check apple-music-bridge status.",
     "manifest": "No usable requested audio stream was found. Check song availability and quality.",
-    "download": "Audio download/decryption failed. Check network and Backend setup status.",
+    "download": "Audio download/decryption failed. Check network and apple-music-bridge status.",
     "finalize": "Downloaded media could not be finalized or tagged. Report this category.",
     "unavailable": "The requested track/format is unavailable. Try another song or quality.",
     "proxy": "Downloader network configuration failed. Report this category.",
@@ -52,7 +52,7 @@ for _endpoint in ("status", "m3u8", "key"):
             )
     for _kind, _message in {
         "refused": "Connection was refused. Check whether the managed service is still running.",
-        "timeout": "The request timed out. Check Backend setup status and retry.",
+        "timeout": "The request timed out. Check apple-music-bridge status and retry.",
         "invalid-response": "Response does not match the JSON contract. Report this category.",
         "unknown": "The request failed; its private details were discarded. Report this category.",
     }.items():
@@ -281,7 +281,7 @@ class Downloader:
         binary = shutil.which(self.binary)
         if not binary:
             raise PlayerError(
-                "Downloader not found. Check the managed installation in Backend setup."
+                "Downloader not found. Check installation with apple-music-bridge setup."
             )
         job = Path(tempfile.mkdtemp(prefix="job-", dir=self.staging))
         output = job / "output"

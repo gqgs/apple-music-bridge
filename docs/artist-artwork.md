@@ -57,8 +57,9 @@ a one-hour client cache lifetime; refreshing may be needed to see a new release.
 ## Image handling and source information
 
 The existing album artwork pipeline validates HTTPS hosts and redirects, bounds
-bytes/dimensions, decodes and emits PNG, and caches results. Its best-effort 400px
-URL substitution retains fallback to the original returned URL. No separate image
+bytes/dimensions, decodes and emits PNG, and caches results. Its best-effort
+[size-aware URL substitution](artwork-sizing.md) retains fallback to the original
+returned URL. No separate image
 cache or image provider is introduced. XML error responses and a single effective
 Cache-Control header remain compatible with the supported client behavior.
 

@@ -72,6 +72,23 @@ def test_default_search_gallery_cover_and_source_metadata(bridge, monkeypatch):
     assert len(requests) == 1
 
 
+@pytest.mark.parametrize("size", [None, "0"])
+def test_release_full_artwork_uses_same_1400_default(bridge, monkeypatch, size):
+    from test_bridge import request
+    from test_bridge_artwork import image_bytes
+
+    server, _ = bridge
+    server.actor.call("remember", [ARTIST, ready_album()])
+    calls = transport(monkeypatch, image_bytes(width=1400))
+    params = {"id": COVER}
+    if size is not None:
+        params["size"] = size
+    response = request(server, "getCoverArt", params)
+    assert response[0] == 200
+    assert decode(response[2], 2048).width == 1400
+    assert calls == [(URL.replace("100x100", "1400x1400"), 8)]
+
+
 def test_pending_enrichment_does_not_hold_http_or_search_and_deduplicates(bridge):
     server, _ = bridge
     server.actor.call("remember", [ARTIST])
@@ -273,7 +290,7 @@ def test_artist_grid_burst_leaves_capacity_for_album_page(bridge, monkeypatch, i
 
     monkeypatch.setattr(server.release_art, "get", tracked_get)
     loads = []
-    image = image_bytes()
+    image = decode(image_bytes(), 1024)
 
     def slow_artist(url):
         loads.append(url)

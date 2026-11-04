@@ -47,4 +47,5 @@ and custom `--runtime-root` paths. The old `python -m apple_music_player.bridge`
 command still works. Use a fresh virtual environment to drop Qt and old entrypoints.
 
 [Options, migration, tests and troubleshooting](docs/bridge-guide.md) ·
-[Runtime and authentication details](docs/rootless-setup.md)
+[Runtime and authentication details](docs/rootless-setup.md) ·
+[Artwork sizing and caching](docs/artwork-sizing.md)

@@ -342,6 +342,11 @@ class Handler(BaseHTTPRequestHandler):
                 "X-Media-Codec": media.codec,
                 "X-Media-Atmos": "JOC-verified" if media.atmos else "unverified",
                 "X-Requested-Quality": self.server.quality,
+                "X-Quality-Fallback": str(
+                    media.codec != "eac3"
+                    if self.server.quality == "atmos"
+                    else media.codec not in {"alac", "flac"}
+                ).lower(),
             }
             if requested:
                 headers["Content-Range"] = f"bytes {start}-{end}/{size}"

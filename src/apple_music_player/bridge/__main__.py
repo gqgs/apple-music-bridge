@@ -26,7 +26,12 @@ def main(argv=None):
     )
     parser.add_argument("--cache-gib", type=int, default=10)
     parser.add_argument("--country", default="br")
-    parser.add_argument("--quality", choices=("lossless", "atmos"), default="lossless")
+    parser.add_argument(
+        "--quality",
+        choices=("lossless", "atmos"),
+        default="lossless",
+        help="Preferred format: atmos falls back to lossless, then AAC; lossless to AAC",
+    )
     parser.add_argument("--port", type=int, default=4533)
     parser.add_argument(
         "--start-runtime",

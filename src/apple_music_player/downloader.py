@@ -27,6 +27,7 @@ DIAGNOSTICS = {
     "catalog-429": "Catalog rate limit reached (429). Wait before retrying.",
     "wrapper": "Downloader could not use the local lite API. Check apple-music-bridge status.",
     "manifest": "No usable requested audio stream was found. Check song availability and quality.",
+    "format-unavailable": "The requested audio format is not available for this track.",
     "download": "Audio download/decryption failed. Check network and apple-music-bridge status.",
     "finalize": "Downloaded media could not be finalized or tagged. Report this category.",
     "unavailable": "The requested track/format is unavailable. Try another song or quality.",
@@ -111,6 +112,10 @@ ERROR_PREFIXES = (
 )
 
 
+class FormatUnavailable(PlayerError):
+    """An explicit format miss, rather than a network, account or download failure."""
+
+
 class Summary:
     """Bounded parser: retain a result path and fixed categories, never raw logs."""
 
@@ -125,6 +130,15 @@ class Summary:
     def diagnose(self, line):
         # run.go prints the queue preamble without a newline before ripSong.
         line = re.sub(rb"^Queue [0-9]+ of [0-9]+: Song->", b"", line.strip())
+        # Pinned extractMedia returns this exact message only after successfully
+        # reading a master playlist and finding no matching codec. Other errors
+        # with the same prefix include HTTP and parsing failures: do not retry.
+        if line == "\u26a0 Failed to extract info from manifest: no codec found".encode():
+            self.error = self.error or "format-unavailable"
+            return
+        if line == b"Failed to dl aac-lc via lite-server: Unavailable":
+            self.error = self.error or "unavailable"
+            return
         for prefix, category in ERROR_PREFIXES:
             if line.startswith(prefix):
                 if category == "catalog":
@@ -136,7 +150,7 @@ class Summary:
                     if match:
                         category += "-" + match[1][:3].decode("ascii")
                 # Preserve the specific HTTP category over a later general error.
-                if not self.error or self.error == "catalog":
+                if not self.error or self.error in {"catalog", "format-unavailable", "unavailable"}:
                     self.error = category
                 return
         if line == b"Unavailable":
@@ -231,7 +245,13 @@ def lite_job_config(output, country):
             "exit-on-error": True,
             "max-memory-limit": 256,
         },
-        "media": {"get-m3u8-mode": "all", "alac-max": 192000, "atmos-max": 2768, "alac-fix": True},
+        "media": {
+            "get-m3u8-mode": "all",
+            "alac-max": 192000,
+            "atmos-max": 2768,
+            "alac-fix": True,
+            "aac-type": "aac-lc",
+        },
         "paths": {
             "alac": str(output),
             "atmos": str(output),
@@ -278,6 +298,28 @@ class Downloader:
             raise PlayerError("Not enough free disk space; download stopped.")
 
     def run(self, track, quality, cancel):
+        if quality not in {"atmos", "lossless"}:
+            raise PlayerError("Unknown audio quality preference.")
+        # One bounded request, with fresh staging and subprocesses per attempt.
+        # The managed wrapper/session and next track's preference never change.
+        qualities = ("atmos", "lossless", "aac") if quality == "atmos" else ("lossless", "aac")
+        deadline = time.monotonic() + self.timeout
+        for candidate in qualities:
+            try:
+                result = self._run(track, candidate, cancel, deadline)
+            except FormatUnavailable:
+                if candidate == qualities[-1]:
+                    raise
+                continue
+            job, _, media = result
+            if candidate == "atmos" and media.codec == "ac3":
+                # amdl --atmos can select ordinary Dolby Digital. Prefer actual
+                # lossless stereo over this non-Atmos lossy variant.
+                shutil.rmtree(job)
+                continue
+            return result
+
+    def _run(self, track, quality, cancel, deadline):
         binary = shutil.which(self.binary)
         if not binary:
             raise PlayerError(
@@ -294,10 +336,14 @@ class Downloader:
         try:
             if cancel.is_set():
                 raise PlayerError("Download cancelled.")
+            if time.monotonic() >= deadline:
+                raise PlayerError("Download timed out. Check that your wrapper is running; retry.")
             args = [str(Path(binary).absolute()), "--json"]
             args.extend(["--config", str(config)])
             if quality == "atmos":
                 args.append("--atmos")
+            elif quality == "aac":
+                args.append("--aac")
             args.append(track.url)
             process = subprocess.Popen(
                 args,
@@ -309,7 +355,6 @@ class Downloader:
             )
             summary = Summary()
             diagnostics = Summary(accept_paths=False)
-            started = time.monotonic()
             last_check = 0.0
             with selectors.DefaultSelector() as selector:
                 selector.register(process.stdout, selectors.EVENT_READ, summary)
@@ -318,7 +363,7 @@ class Downloader:
                     if cancel.is_set():
                         raise PlayerError("Download cancelled.")
                     now = time.monotonic()
-                    if now - started > self.timeout:
+                    if now >= deadline:
                         raise PlayerError(
                             "Download timed out. Check that your wrapper is running; retry."
                         )
@@ -338,11 +383,27 @@ class Downloader:
             except subprocess.TimeoutExpired:
                 raise PlayerError("Downloader did not exit after completing output.") from None
             if code != 0 or not summary.path:
+                misses = {"format-unavailable", "unavailable"}
+                errors = (summary.error, diagnostics.error)
+                # Hard errors/warnings must not be hidden by a format miss on
+                # the other pipe (or an unavailable web-manifest fallback).
+                category = next((error for error in errors if error and error not in misses), None)
                 category = (
-                    summary.error or diagnostics.error or summary.warning or diagnostics.warning
+                    category
+                    or summary.warning
+                    or diagnostics.warning
+                    or next((error for error in errors if error), None)
                 )
                 if category:
-                    raise PlayerError(f"Download failed [{category}]. {DIAGNOSTICS[category]}")
+                    # Pinned amdl exits zero for an unavailable codec. A crash,
+                    # signal or other nonzero exit is not a safe downgrade cue.
+                    if category in misses and code != 0:
+                        raise PlayerError(
+                            f"Download failed [process-exit; exit {code}]. "
+                            "Downloader stopped before completing this request."
+                        )
+                    failure = FormatUnavailable if category in misses else PlayerError
+                    raise failure(f"Download failed [{category}]. {DIAGNOSTICS[category]}")
                 raise PlayerError(
                     f"Download failed [no-result; exit {code}]. No valid media summary. "
                     "Report this category, requested quality and storefront; do not share raw logs."

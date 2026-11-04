@@ -431,6 +431,10 @@ class Actor:
         self.cancel = threading.Event()
         self.metrics = Metrics()
         self.last_metadata = 0.0
+        self.metadata_idle = threading.Event()
+        self.metadata_idle.set()
+        self.metadata_activity_lock = threading.Lock()
+        self.metadata_active = 0
         self.pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="bridge-core")
         self.metadata_pending = threading.BoundedSemaphore(4)
         future = self.pool.submit(factory, self.cancel)
@@ -502,7 +506,19 @@ class Actor:
         return self.pool.submit(getattr(self.core, method), *args, **kwargs).result()
 
     def metadata(self, method, params, timeout=12):
-        self.last_metadata = time.monotonic()
+        with self.metadata_activity_lock:
+            self.metadata_active += 1
+            self.metadata_idle.clear()
+        try:
+            return self._metadata_request(method, params, timeout)
+        finally:
+            with self.metadata_activity_lock:
+                self.last_metadata = time.monotonic()
+                self.metadata_active -= 1
+                if not self.metadata_active:
+                    self.metadata_idle.set()
+
+    def _metadata_request(self, method, params, timeout=12):
         if method != "search3":
             return self._metadata(method, params, timeout)
         # HTTP authentication precedes this call. Preserve user/API-key and client

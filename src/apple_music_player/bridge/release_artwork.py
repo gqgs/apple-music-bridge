@@ -5,7 +5,6 @@ import math
 import sqlite3
 import threading
 import time
-from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import closing, contextmanager
 from dataclasses import asdict
@@ -51,7 +50,7 @@ class ReleaseArtwork:
         self.stop = threading.Event()
         self.lock = threading.Lock()
         self.pending = {}
-        self.starts = deque()
+        self.metrics = actor.metrics
         self.pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="artist-release")
 
     @contextmanager
@@ -138,25 +137,23 @@ class ReleaseArtwork:
         artist = self.core.cached_artist(identifier)
         album = self.selection(artist)
         if album:
+            self.metrics.record("artist_release", "hit")
             return album
         after, reason = self.check(identifier)
         after -= time.time()
         if after > 0:
+            self.metrics.record("artist_release", "negative")
             raise ReleaseUnavailable(reason, after)
         with self.lock:
             if self.stop.is_set():
                 raise ReleaseUnavailable("shutdown")
             if identifier in self.pending:
+                self.metrics.record("artist_release", "joined")
                 raise ReleaseUnavailable("release-pending")
-            now = time.monotonic()
-            while self.starts and self.starts[0] <= now - 60:
-                self.starts.popleft()
-            if len(self.pending) >= 4 or len(self.starts) >= 8:
-                raise ReleaseUnavailable(
-                    "release-busy",
-                    max(3, self.starts[0] + 60 - now) if len(self.starts) >= 8 else 3,
-                )
-            self.starts.append(now)
+            if len(self.pending) >= 4:
+                self.metrics.record("artist_release", "busy")
+                raise ReleaseUnavailable("release-busy", 3)
+            self.metrics.record("artist_release", "miss")
             future = self.pool.submit(self.enrich, identifier, artist)
             self.pending[identifier] = future
 
@@ -169,6 +166,7 @@ class ReleaseArtwork:
         raise ReleaseUnavailable("release-pending")
 
     def enrich(self, identifier, artist):
+        started = time.monotonic()
         delay = 300
         reason = "release-failed"
         try:
@@ -176,6 +174,10 @@ class ReleaseArtwork:
             for _ in range(16):
                 if self.stop.is_set() or time.monotonic() >= deadline:
                     return
+                while not self.actor.metadata_idle.is_set():
+                    reason, delay = "release-deferred", 3
+                    if time.monotonic() >= deadline or self.stop.wait(0.1):
+                        return
                 quiet_wait = self.actor.last_metadata + 1 - time.monotonic()
                 if quiet_wait > 0:
                     reason, delay = "release-deferred", 3
@@ -227,6 +229,12 @@ class ReleaseArtwork:
             reason, delay = "release-failed", 300
             # No provider payloads, credentials, or URLs in diagnostics.
         finally:
+            outcome = (
+                "cancelled"
+                if self.stop.is_set()
+                else {"release-failed": "failed", "release-deferred": "deferred"}.get(reason, "ok")
+            )
+            self.metrics.record("artist_release_work", outcome, time.monotonic() - started)
             if not self.stop.is_set():
                 try:
                     with self.connection() as db:

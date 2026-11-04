@@ -37,10 +37,12 @@ remaining suppression interval. Provider failures stay HTTP 503 (`release-failed
 and catalog deferrals stay HTTP 503 (`release-deferred`) with the bounded actual
 wait. They are not treated as proof that artwork is absent. Search,
 `getArtists`, and artwork-info requests do not schedule enrichment themselves.
-One worker, at most four pending jobs and eight admissions per minute prevent
-large artist lists from causing hundreds of upstream requests. Catalog calls share
-the interactive three-second rate limiter and honor HTTP 429 deferrals. Background
-work waits for a one-second interactive quiet period, with a bounded 30-second
+One worker and at most four pending jobs bound cold artist enrichment. Catalog
+calls share the interactive three-second rate limiter and honor HTTP 429 deferrals.
+There is no additional eight-admissions-per-minute ceiling: it unnecessarily
+stalled grids while the shared limiter already bounds provider traffic. Background
+work waits while interactive requests are active and for one second after they
+finish, with a bounded 30-second
 scheduling budget. Each upstream call retains its existing network timeout.
 
 Successful empty lookups are suppressed for one hour; failures for five minutes.
@@ -86,10 +88,8 @@ queues request a one-second delayed retry rather than the generic 30-second wait
 not consume either network pool. This prevents unrelated slow artist images from
 occupying both album-page workers. Requests for the same image still share work.
 
-Cold metadata admission remains four jobs/eight starts per minute with the shared
-catalog limiter: this is not a claim that a large cold artist grid fills instantly.
-`release-pending` uses a short Retry-After, while `release-busy` reflects the
-admission window. Clients must release image concurrency slots between delayed
+Cold metadata admission remains four jobs with the shared catalog limiter: this is not a claim that a large cold artist grid fills instantly.
+`release-pending` and a full queue (`release-busy`) request a three-second retry. Clients must release image concurrency slots between delayed
 retries and cancel stale-view work. Retrying 503 four times over seven seconds
 while holding all five client image slots can block album requests before they
 even reach the bridge. A bridge worker fix cannot repair that client queue.
@@ -115,8 +115,7 @@ image bytes. The server never replaces these failures with cacheable placeholder
 Persistent lookup checks now retain their outcome. Legacy checks with no recorded outcome expire once during migration, since they
 may have rejected collaborator releases. Their outcome is not reinterpreted as a
 confirmed miss; all metadata, image bytes, media and credentials remain intact.
-Reevaluation still uses the existing bounded queue and rate limiter. The eight-starts-per-minute and four-pending
-limits are unchanged. A large cold grid can still encounter legitimate admission
+Reevaluation still uses the bounded four-job queue and shared rate limiter. A large cold grid can still encounter legitimate admission
 waits of tens of seconds. Clients should respect these delays, avoid repetitive
 error-level logging for expected pending/missing images, and cancel stale work.
 
@@ -128,3 +127,54 @@ both views. Regression tests cover a collaborator-only EP via artist detail and
 background lookup, restart persistence, and rejection for a different artist ID.
 User sample text suggests this may explain some featured-artist/soundtrack cases,
 but their actual public lookup payloads were not available for live confirmation.
+
+### Headless Qt ownership
+
+The bridge initializes a QCoreApplication on the process main thread before its
+workers and retains it through process shutdown. It does not create a window,
+require a display server, or suppress Qt warnings. QBuffer/QImageReader instances
+remain local to each decoding call. Qt documents QImageReader as reentrant and
+recommends a QCoreApplication for non-GUI Qt programs:
+https://doc.qt.io/qt-6/qimagereader.html
+https://doc.qt.io/qt-6/qcoreapplication.html
+
+Qt's [QFactoryLoader::instance implementation](https://github.com/qt/qtbase/blob/v6.12.0/src/corelib/plugin/qfactoryloader.cpp#L501)
+moves parentless plugin instances to Qt's main thread. A stable main-thread
+application is therefore important even though our individual buffers/readers
+are created and used within a single worker.
+
+A fresh-process test reproduces moveToThread warnings when successive short-lived
+worker pools decode PNG/JPEG/WebP without an application object. The same workload
+through bridge initialization emits no warnings, including with an existing core
+application and with no usable GUI platform. Decoding succeeded in the original
+reproduction; the warnings demonstrate invalid thread affinity, not proven media
+corruption or a cause of catalog rate limits.
+
+
+### Cold grid progress and interactive priority
+
+A 12-artist synthetic test using the real catalog request/parser/cache path and
+virtual waits makes 12 lookups over 33 seconds of start-to-start spacing. Every
+request starts at least three seconds after the preceding request; warm revisits
+make none. This removes the artificial stop after eight admissions, not the
+provider's rate limit. With one cold lookup per artist, a one-per-three-seconds
+ceiling plus network/image latency is expected. No undocumented batch API or
+unverified catalog URL is introduced.
+
+The former one-second-since-start check could allow enrichment during a long
+interactive search. Activity tracking now spans foreground request completion,
+including cooldown waits, so background calls yield until the foreground is idle.
+An upstream call already in progress cannot be preempted; provider slowness and
+HTTP 429 can still make an interactive request exceed its existing 12-second
+budget. No metadata is fabricated to hide such failures.
+
+Diagnostics add aggregate `artist_release` cache-hit/admission (`miss`), joined,
+negative and busy counts, plus `artist_release_work` outcomes/duration. These
+contain no queries, artist IDs, credentials, URLs or provider payloads.
+
+Client retries are still required: the inspected Supersonic main (539b360) limits
+a fetch to seven seconds of retry waits and records a cooldown without scheduling
+a future visible-card refresh. A robust client should schedule a bounded delayed
+retry for still-visible pending cards, release fetch slots during the wait, honor
+Retry-After, and cancel on navigation. This bridge change does not modify that
+client behavior or claim that every cold card automatically refreshes.

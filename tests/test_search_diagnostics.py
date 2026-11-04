@@ -1,14 +1,8 @@
 import io
 import json
-import threading
 from urllib.parse import parse_qs, urlsplit
 
-from conftest import wait_until
-from PySide6.QtWidgets import QApplication
-
-from apple_music_player.app import Window
 from apple_music_player.catalog import Catalog
-from apple_music_player.model import Album, Track
 
 QUERY = "Atlanta Millionaires Club"
 ATLANTA = dict(
@@ -84,75 +78,3 @@ def test_diagnostics_public_allowlist_and_parser_rejections(monkeypatch):
     assert result.diagnostics["accepted_result_count"] == 1
     assert "TEST_SECRET" not in json.dumps(result.diagnostics)
     assert result.diagnostics["accepted_results"][0]["id"] == "202"
-
-
-def test_search_diagnostic_snapshot_survives_stale_home_album_and_edited_input(
-    app, tmp_path, monkeypatch
-):
-    window = Window(tmp_path / "cache")
-    window.startup_attempted = True
-    window.search_kind.setCurrentIndex(window.search_kind.findData("album"))
-    monkeypatch.setattr(window.controller, "tick", lambda: None)
-    started, release = threading.Event(), threading.Event()
-    wrong_response = [False]
-
-    def request(endpoint, **params):
-        if params.get("term") == "older query":
-            started.set()
-            assert release.wait(3)
-            return [UNRELATED]
-        if endpoint == "search":
-            return [UNRELATED if wrong_response[0] else ATLANTA]
-        if params.get("entity") == "song":
-            return [
-                ATLANTA,
-                dict(
-                    kind="song",
-                    trackId=11,
-                    collectionId=101,
-                    trackName="Fixture",
-                    artistName="Faye Webster",
-                ),
-            ]
-        return [UNRELATED]  # Distinct Home artist-album fixture.
-
-    monkeypatch.setattr(window.catalog, "request", request)
-    try:
-        window.search.setText("older query")
-        window.search_catalog()
-        assert started.wait(2)
-        window.search.setText(QUERY)
-        window.search_catalog()
-        release.set()
-        wait_until(lambda: (app.processEvents(), window.tick(), window.catalog_future is None)[2])
-        assert window.results[0].id == "101"
-        assert window.last_search_diagnostics["query"] == QUERY
-        window.open_album(Album("br", "101", QUERY))
-        wait_until(lambda: (app.processEvents(), window.tick(), window.catalog_future is None)[2])
-        window.copy_search_button.click()
-        report = json.loads(QApplication.clipboard().text())
-        assert not report["currently_displaying_this_search"]
-        assert report["last_completed_search"]["accepted_results"][0]["id"] == "101"
-        window.history.record(Track("br", "11", "Fixture", "101", artist_id="301"))
-        window.pages.setCurrentIndex(0)
-        wait_until(lambda: (app.processEvents(), window.tick(), window.release_context is None)[2])
-        assert window.last_search_diagnostics["accepted_results"][0]["id"] == "101"
-        wrong_response[0] = True
-        window.search_catalog()
-        wait_until(lambda: (app.processEvents(), window.tick(), window.catalog_future is None)[2])
-        assert window.results[0].id == "202"
-        window.copy_search_button.click()
-        report = json.loads(QApplication.clipboard().text())
-        assert report["currently_displaying_this_search"]
-        assert report["last_completed_search"]["query"] == QUERY
-        assert report["last_completed_search"]["accepted_results"][0]["id"] == "202"
-        window.search.setText("new typed text")
-        assert "previous results" in window.catalog_status.text()
-        window.copy_search_button.click()
-        report = json.loads(QApplication.clipboard().text())
-        assert report["current_input"]["query"] == "new typed text"
-        assert report["last_completed_search"]["query"] == QUERY
-    finally:
-        release.set()
-        window.close()
-        QApplication.clipboard().clear()

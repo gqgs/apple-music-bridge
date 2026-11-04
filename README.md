@@ -1,49 +1,121 @@
-# Apple Music Player
+# apple-music-bridge
 
-<img src="src/apple_music_player/assets/logo.svg" width="64" height="64" alt="Player logo: white play triangle with mint spatial sound arcs on navy" />
+A local, read-only OpenSubsonic bridge for Apple Music. Use a client such as
+[Supersonic](https://github.com/gqgs/supersonic) to browse, search and play full
+lossless or spatial-audio files. The bridge handles catalog metadata, downloads,
+artwork and a bounded media cache. It does not transcode audio or confirm your
+receiver's output mode; Atmos passthrough depends on the client and hardware.
 
-A small native Linux player: search songs, browse albums, queue lossless/Dolby downloads, and play through mpv. Python 3.11+, Qt Widgets, SQLite. No embedded browser.
+## Install and run
+
+Requires Python 3.11+, **ffprobe** (usually provided by ffmpeg), and Linux x86_64
+with permitted unprivileged user namespaces/mounts for the managed runtime.
+No Qt, display server or mpv installation is required by the bridge.
 
 ```sh
 python -m venv .venv
 . .venv/bin/activate
 pip install -e '.[dev]'
-apple-music-player
-# Tests use generated audio and fake external tools; no account required:
-QT_QPA_PLATFORM=offscreen pytest -q
-ruff check src tests
-ruff format --check src tests
+apple-music-bridge --help
 ```
 
-**One-window backend setup:** open **Backend setup** for the **Managed rootless lite** flow: pinned runtime installation, local sign-in/2FA, start/status and shutdown. It requires Linux x86_64 with permitted user namespaces/mounts. Installation and first sign-in require explicit user actions. Once configured, the managed backend starts in the background with the app; its status is shown in the main window. Stop is respected for the current session. No sudo or automatic OS changes. The wrapper ZIP is an upstream GitHub Actions artifact (browser sign-in may be needed), verified by SHA-256 before installation. See [the three setup steps and exact pins](docs/rootless-setup.md). The user has validated managed lossless and Atmos on Arch; automated tests use synthetic processes.
+For a **new installation**, obtain the pinned `wrapper-lite-linux-x86_64` ZIP
+from the [upstream artifact run](https://github.com/WorldObservationLog/wrapper/actions/runs/41407950505).
+GitHub may require browser sign-in. Review the third-party runtime origin before
+installing; this project does not bundle its proprietary assets. The recorded
+artifact expiration is January 31, 2027. If unavailable, setup is blocked until a
+new verified pin is supplied; do not substitute a `latest` or classic wrapper ZIP.
 
-**Requirements:** `mpv`, `ffprobe` (normally packaged with ffmpeg), and Qt Wayland libraries. Tests also use `ffmpeg` to generate synthetic audio. Backend setup lists missing tools; it does not install OS packages. Managed amdl v0.1.4 handles normal audio finalization natively; GPAC/MP4Box is not required.
+```sh
+apple-music-bridge setup --archive /path/to/wrapper-lite-linux-x86_64.zip --accept-runtime
+apple-music-bridge login
+apple-music-bridge status
+apple-music-bridge serve
+```
 
-1. Open **Settings**, select your cache size. For Dolby, set your HDMI device from `mpv --audio-device=help`. The validated machine used `alsa/hdmi:CARD=HDMI,DEV=3`; your device may differ.
-2. Search defaults to **Artists** with **BR** for new configurations. Choose **Songs**, **Albums** or **Artists**, enter a query and your two-letter storefront, then Search. Search an artist name, choose **Open artist**, then **Open album** (or double-click) to see tracks. Artist releases appear as Albums, Singles & EPs, Live Albums, Compilations, then Others, newest first within each group. Titles show the returned release year. Groups use a compact neural classifier with directly programmed weights, not trained weights or Apple editorial labels; unmarked releases default to Albums. **← Back** (Alt+Left) returns to the previous view with its query, selection and scroll position. **Play album** starts from the first track and replaces current playback/queue; **Queue album** appends those songs. Album detail shows one cover/header and compact numbered tracks. Click its artist name to open that artist’s albums inside the player when the collection supplies an artist ID. Song results use **Queue selected**; **Browse album** opens the selected song's album. For artist browsing, choose **Artists**, search a name, then **Open artist** to list albums using its exact artist ID; open an album to play it. Availability and ranking depend on the public catalog/storefront.
-3. Choose **Prefer Lossless** or **Prefer Dolby Atmos** before queueing. Playback starts after a full download; only the next track is prefetched. Use pause, seek, Next, Remove, Cancel download and Retry. Device changes apply to the next playback; Retry restarts failed playback.
+Setup validates the ZIP checksum, installs the rootless launcher and downloads
+pinned amdl. It does not execute the runtime or sign in. Login prompts locally for
+your Apple account, hidden password and hidden verification code when requested.
+Never pass Apple credentials as command arguments or put them in configuration.
+Ctrl-C cancels login and restores the previous session. Stop `serve` before login.
+No command uses sudo or changes host security policy.
 
-**Media format is measured, not assumed.** Now playing shows Lossless (ALAC/FLAC), Lossy (AAC/AC-3), Dolby Digital Plus / Atmos unverified, or Dolby Atmos when ffprobe reports a JOC profile. Codec, sample rate, channels and available bit depth are shown. Requested-quality fallbacks are conspicuous. The separate output label reports mpv's PCM or compressed passthrough state, never receiver-confirmed Atmos. Dolby playback requires an explicit device and stops if mpv reports PCM fallback. Confirm Atmos on your soundbar. No app volume control is provided.
+`serve` starts the previously installed, signed-in runtime and binds the bridge
+to **127.0.0.1:4533**. Configure your client using the username and key in
+`$XDG_CONFIG_HOME/apple-music-bridge/auth.json` (default
+`~/.config/apple-music-bridge/auth.json`); the key is the client password/API key.
+Read that private file locally; do not paste it into logs or chat. These credentials
+are separate from your Apple account. Client access is authenticated; remote
+binding and browser access are not supported.
 
-**Browsing:** the documented [public iTunes Search/Lookup API](https://performance-partners.apple.com/search-api) supplies metadata without account credentials or a developer token. Its catalog is not identical to the subscription Apple Music catalog; availability can differ, and some album IDs may not resolve. Searches are explicit and cached in memory. Rapid navigation waits automatically for the three-second request spacing while keeping current results visible. Only the newest request is applied. HTTP 429 responses honor Retry-After with at most two automatic retries and at most 60 seconds per automatic wait; longer waits or persistent failures stop with a message. No audio previews are fetched. Album artwork and local Home shelves are described in [browsing](docs/browsing.md). The official Apple Music catalog API would separately require a developer token; wrapper login does not supply one.
+Useful options:
 
-The **Storefront** is saved between launches. Editing the storefront clears results from the previous country. Search again to browse that country. Queue rows show their original storefront; existing queued tracks are not rewritten. Remove old-country entries and queue fresh results when switching stores.
+```sh
+apple-music-bridge serve --country br --quality lossless --cache-gib 10
+apple-music-bridge serve --country br --quality atmos --diagnostics
+```
 
-The bold storefront notice compares browsing with the managed backend's reported region. If it shows **Browsing US · Managed backend reports BR**, click **Use BR storefront**, search again, and replace any old US queue entries. Mismatched entries are blocked before downloading. New configurations default to BR as requested; explicit saved storefronts (including US) are preserved. The backend comparison still warns about mismatches. Region reporting does not prove subscription availability for every song.
+Choose the storefront matching your Apple subscription. Defaults are `br`,
+lossless, 10 GiB and port 4533. Flags are not silently persisted. Diagnostics
+contain aggregate timings/outcomes, not queries, credentials or raw upstream logs.
+The runtime's local API uses port 12340; the bridge never kills an unrelated owner.
 
-**Cache:** `$XDG_CACHE_HOME/apple-music-player` (default `~/.cache/apple-music-player`) is private and separate from existing downloads. The default completed-media limit is 10 GiB. Eviction protects queued/current tracks, distinguishes requested quality variants, and uses playback recency. Remove queue entries or raise the limit if protected files fill it. Staging adds up to 2 GiB per job, checked every 250 ms and at completion, with a 128 MiB free-space guard; a fast writer can briefly overshoot. This is **not a hard disk quota**. Incomplete jobs and unindexed media are recovered on restart. Queue contents are session-only; completed cache entries survive. One app instance per cache.
+## Existing installations
 
-The app writes a fresh, private per-job downloader config and leaves your existing config/downloads untouched. It disables lyrics, artwork and conversion, closes stdin, and discards all raw downloader output (the pinned CLI can print its configuration). Only a validated final path is accepted. Authentication is configured through Backend setup. No account tokens are stored in ordinary app settings.
+Do **not** repeat setup or login if your current session works. Installed runtimes
+under `$XDG_DATA_HOME/apple-music-player` are reused in place, including the existing
+`.player-login-ok` receipt and tokens. Fresh installations use
+`$XDG_DATA_HOME/apple-music-bridge`. If both contain installations, explicitly
+select `--runtime-root /existing/path` on each command. No session is moved/copied.
 
-See [design and validation](docs/design.md). New browsing behavior still needs local acceptance testing; automated tests use synthetic audio and fake processes.
+Keep your existing bridge credential file and cache arguments:
 
-For a failed download, see [safe diagnostic categories](docs/download-diagnostics.md). Share only the bracketed category, quality and storefront; no raw logs or account files are needed.
+```sh
+apple-music-bridge serve --auth-file /existing/private/auth.json --runtime-root /existing/runtime
+```
 
-The original [SVG logo](src/apple_music_player/assets/logo.svg) is bundled as the Qt application/window icon; it scales without additional dependencies. This project is not affiliated with Apple.
+The cache remains `$XDG_CACHE_HOME/apple-music-bridge` (default
+`~/.cache/apple-music-bridge`). Supply `--cache /existing/path` if customized.
+Desktop settings/downloads/history are left untouched and are not imported as
+listening history. Select any previous nondefault storefront/quality explicitly.
+The old `python -m apple_music_player.bridge ...` invocation and flags remain
+supported. The internal package and `runtime_child` module retain their old names
+for compatibility; the desktop `apple-music-player` command is retired. A fresh
+virtual environment removes old PySide6 dependencies and stale entrypoints.
+The GitHub repository has **not** been renamed yet.
 
-Home defaults to local recently played albums, with recent releases from artists played. See [browsing scope, artwork conditions and history storage](docs/browsing.md). Legacy external-backend settings now lead to managed setup; no old installations, downloads or sessions are deleted. Existing managed sessions continue unchanged. The pinned amdl engine remains an external dependency.
+## Behavior and limits
 
+- Public iTunes Search/Lookup metadata needs no developer token, but may omit
+  releases or rank unexpectedly. Artist-first client search avoids extra category
+  requests. Shared catalog spacing is at least three seconds; cold artist images
+  can load slowly. [Protocol details](docs/opensubsonic-poc.md).
+- Artist images are available release covers, not portraits. Artwork requests are
+  bounded, HTTPS/host/redirect validated and decoded as PNG/JPEG/WebP within 2 MiB
+  and 2048×2048 input limits, then served as PNG. The 400px CDN substitution is
+  best-effort and falls back to the returned original URL. [Artwork details](docs/artist-artwork.md).
+- Full tracks download before streaming. Media is probed, quality variants remain
+  separate, concurrent requests share work, and streaming leases protect files
+  from eviction. Requested Atmos is not proof of Atmos/JOC; actual metadata is
+  retained. Clients need appropriate passthrough support for spatial output.
+- Completed media uses LRU eviction. Staging has a 2 GiB per-job guard and a
+  128 MiB free-space reserve; fast writers can overshoot between checks. This is
+  not a hard total-disk quota. User downloads outside this cache are never deleted.
+- Runtime/session directories are private; stored tokens are **not encrypted**.
+  Login uses sealed memfd arguments and a private 2FA FIFO. No raw subprocess
+  output is logged. [Runtime/security details](docs/rootless-setup.md).
+- No library edits, cloud history, personalized recommendations, lyrics provider
+  or new DRM implementation. Pinned external amdl handles download/decryption.
 
-Artist cards use release covers by default, reusing cached album artwork with
-bounded background lookups. See [selection and coverage limits](docs/artist-artwork.md).
-Remove the retired `--artist-images` option from older launch commands.
+## Test
+
+```sh
+pytest -q tests experiments/release_network
+ruff check src tests experiments
+ruff format --check src tests experiments
+```
+
+Tests require ffmpeg for synthetic media and intentionally require PySide6 to be
+absent. They use fake runtime processes and catalog/image fixtures—no account,
+Apple downloads or proprietary runtime execution. Real sign-in and client/hardware
+lossless/Atmos acceptance still require local user testing.

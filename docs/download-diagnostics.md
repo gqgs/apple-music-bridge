@@ -1,6 +1,6 @@
 # Download diagnostics
 
-If a download fails, report only the bracketed category shown in the player,
+If a download fails, report only the bracketed category returned by the bridge,
 requested quality and two-letter storefront. Do not share raw downloader output,
 config, HTTP bodies or account files. Retry preserves the managed login.
 
@@ -27,51 +27,22 @@ Source review against amdl v0.1.4
   matching wrapper [`56a7dcd`](https://github.com/WorldObservationLog/wrapper/blob/56a7dcd726f2c2ef1d4420d6747ba0bafe215fee/lite/lite_main.cpp).
   A successful status probe does not prove a song can download.
 - Pinned amdl audio finalization uses native Go defragmentation, tagging and ALAC
-  repair; MP4Box is not required for the supported normal audio path. The player requires
-  ffprobe for actual format verification and mpv for playback.
+  repair; MP4Box is not required for the supported normal audio path. The bridge requires
+  ffprobe for actual format verification; playback is handled by the client.
 
 Tests use source-shaped failure transcripts, both output streams, oversized and
-fragmented lines, zero/nonzero exits, nested album output paths and synthetic
-audio. No proprietary runtime or account is executed. The reported real-user
-download failure is not yet reproduced: its new category is needed before
-claiming a root cause or changing authentication.
+fragmented lines, zero/nonzero exits, nested album output paths and synthetic audio.
+No proprietary runtime or account is executed. Fixed diagnostic categories separate
+wrapper endpoint/application-code failures from HTTP status, refusal, timeout,
+invalid response and empty result. Only allowlisted endpoints/codes/messages escape.
 
-The original `[wrapper]` category combined status/manifest failures. It now
-reports the endpoint and separates `api` (application envelope code), `http`
-(HTTP status), `refused`, `timeout`, `invalid-response`, `empty`, and `unknown`.
-Only allowlisted endpoints, codes and fixed messages are retained. In particular,
-`wrapper-m3u8-api-404` means the service responded but could not provide a
-manifest; it does **not** mean connection refusal or prove expired credentials.
-This matches the pinned wrapper's `handle_m3u8` and amdl's
-`internal/wrapper/wrapper_test.go` application-error test. `/status` uses only
-the saved storefront and can succeed while `/m3u8` fails. The setup screen now
-says “Service reachable · local session saved; media access not yet verified”.
+`wrapper-m3u8-api-404` means the reached service could not provide a song manifest;
+it does not prove expired login. Use the matching storefront via `serve --country`.
+The bridge preserves typed country/song IDs and checks known backend regions before
+download. Catalog coverage is not guaranteed to match the subscription catalog.
 
-Lifecycle review and a fake-process Qt regression verify that closing the setup
-dialog leaves the service and its app-owned health timer running. The rootless
-launcher uses user/mount/PID namespaces, not a network namespace; both clients
-target `http://127.0.0.1:12340`. amdl's default HTTP client has no total request
-timeout; the player still enforces its 900-second job timeout, independently of
-its 0.5-second status probe. None of these checks exercises an actual account.
-
-A direct BR song URL succeeding while browse results fail exposed a UI mismatch:
-search previously reset to `us`, and pasting a BR URL left the old US results in
-place. The player now saves the storefront and adopts it from validated URLs,
-invalidating prior results/in-flight lookups. Album lookup already propagates the
-selected result's country. Song queue URLs use `trackId`; album lookup uses
-`collectionId`. A regression uses the supplied `/br/song/still/593614986?` URL
-with synthetic collection metadata to verify all three routes produce the same
-BR song URL. Live public lookup was unavailable in the execution environment,
-so this does not establish cross-catalog ID equivalence or every track's
-subscription availability. If a fresh BR result still fails, report that one
-song's public URL for comparison; do not reauthenticate based on this error alone.
-
-Starting directly in search could still reuse a saved US choice without opening
-that BR URL. The UI now prominently compares the selected storefront with the
-backend's normalized two-letter `/status` region, with a button to adopt it.
-Fresh setups now default to BR by explicit user request; saved country choices are preserved. Unknown/numeric/multiple backend
-regions are not guessed. Country edits persist immediately; changing the field
-invalidates searches. The controller rejects both newly added and previously
-queued mismatched tracks before download, preserving their original IDs.
-Qt mouse/keyboard regressions cover selecting BR, searching Albums, opening
-tracks and queueing; `docs/storefront-smoke.png` uses synthetic backend metadata.
+The rootless launcher shares host networking. Both bridge and downloader use the
+loopback lite endpoint, while the downloader has a 900-second job timeout and
+readiness probes use 0.5 seconds. The CLI status distinguishes a saved session and
+reachable service from verified media access. Never reauthenticate solely because
+a public catalog song is unavailable.

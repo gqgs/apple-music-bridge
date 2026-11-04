@@ -7,17 +7,12 @@ import signal
 import threading
 from pathlib import Path
 
-from PySide6.QtCore import QCoreApplication
-
 from ..model import PlayerError
 from .core import Actor
 from .http import ProtocolCore, Server, auth_file
 
-_qt_application = None  # Keep Qt main-thread/plugin ownership alive until process exit.
 
-
-def main():
-    global _qt_application
+def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--auth-file", type=Path, required=True)
     parser.add_argument(
@@ -37,14 +32,14 @@ def main():
         "--start-runtime",
         type=Path,
         metavar="EXISTING_RUNTIME_ROOT",
-        help="Explicitly start an already installed/signed-in managed runtime; close the GUI first",
+        help="Start an installed/signed-in runtime; stop any other owner first",
     )
     parser.add_argument(
         "--diagnostics",
         action="store_true",
         help="Print aggregate timings/outcomes without queries, URLs or credentials",
     )
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
     os.umask(0o077)
 
     def terminate(signum, frame):
@@ -60,7 +55,6 @@ def main():
         if not 1 <= args.port <= 65535 or not 1 <= args.cache_gib <= 1024:
             raise ValueError()
         credentials = auth_file(args.auth_file)
-        _qt_application = QCoreApplication.instance() or QCoreApplication(["apple-music-bridge"])
         actor = Actor(
             lambda cancel: ProtocolCore(
                 args.cache,

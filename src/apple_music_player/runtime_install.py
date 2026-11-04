@@ -41,7 +41,7 @@ def host_problem():
     if platform.system() != "Linux" or platform.machine() not in {"x86_64", "AMD64"}:
         return "Managed lite currently requires Linux x86_64."
     if os.geteuid() == 0:
-        return "Run the player as your normal desktop user, never as root."
+        return "Run the bridge as your normal user, never as root."
     if not hasattr(os, "memfd_create"):
         return "Private memory-backed login is unavailable on this host."
     for name in (
@@ -62,7 +62,7 @@ def private_dir(path):
         raise PlayerError("Runtime paths must not contain symlinks.")
     path.mkdir(parents=True, exist_ok=True, mode=0o700)
     if path.stat().st_uid != os.getuid():
-        raise PlayerError("Runtime directory must belong to your desktop user.")
+        raise PlayerError("Runtime directory must belong to your user.")
     path.chmod(0o700)
     return path
 
@@ -143,7 +143,7 @@ class RuntimeStore:
             fcntl.flock(self.lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
             self.lock.close()
-            raise PlayerError("Another player manages this runtime. Close it first.") from None
+            raise PlayerError("Another process manages this runtime. Close it first.") from None
         self.current = safe_path(self.root, self.root / "installed")
         self.downloader = self.current / "amdl"
         self.launcher = self.current / "wrapper-lite-rootless"
@@ -174,7 +174,7 @@ class RuntimeStore:
                 raise ValueError()
         except Exception:
             raise PlayerError(
-                "Runtime absent or changed. Install the pinned archive in Backend setup."
+                "Runtime absent or changed. Use apple-music-bridge setup with the pinned archive."
             ) from None
 
     def install(self, archive, cancel):

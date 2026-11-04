@@ -1,52 +1,27 @@
-# Local OpenSubsonic bridge proof of concept
+# Local OpenSubsonic bridge protocol
 
-Draft PoC branch `poc/opensubsonic-bridge`, based on main `22d9dce` (PR #6).
-Published for review and testing; no change to the desktop UI. This is a read-only API
-subset, not a tested replacement for Navidrome or a promise of client compatibility.
+This document describes the bridge API and the history of its compatibility fixes.
+See [README](../README.md) for current installation, terminal login and migration.
+The API is a read-only subset, not a complete Navidrome replacement.
 
-## Run locally
+## Launch and compatibility
 
-Use the existing player development environment. No new dependencies:
+The preferred command is `apple-music-bridge serve`, which starts an existing
+installed/signed-in runtime. `setup` and `login` are separate explicit local steps.
+The compatibility invocation `python -m apple_music_player.bridge --auth-file ...`
+retains its original cached-file-only behavior unless `--start-runtime PATH` is
+supplied. It never installs or signs in automatically.
 
-```sh
-. .venv/bin/activate
-python -m apple_music_player.bridge --auth-file ~/.config/apple-music-bridge/auth.json --init-auth
-python -m apple_music_player.bridge --auth-file ~/.config/apple-music-bridge/auth.json
-```
+Client username/key credentials are separate from Apple authentication. The file
+is private (0600), validated and never logged. API-key or username/password
+(token/salt, plain and hex protocol authentication) remain supported. Prefer form
+POST to avoid credentials in client URL logs. To rotate, stop the service, choose
+a new private file with legacy `--init-auth`, then configure both server and client
+with that file. Existing files are never overwritten by initialization.
 
-The first command creates a random bridge-only key in a new 0600 file. Open it in
-your local editor; never paste its contents into chat/logs. Configure a native
-OpenSubsonic client with URL `http://127.0.0.1:4533`, preferably API-key authentication.
-For older clients use username `bridge` and that same random key as the password
-(token/salt, plain and hex protocol authentication are supported). This is **not**
-your Apple password. Stop the bridge, replace the credential file using `--init-auth`,
-and restart to revoke the old key. Prefer clients using form POST so credentials
-are not in their URL history/logs. The bridge itself has no request/access logging.
-
-By default the service browses public metadata and streams **already cached files
-only**. It does not start/install/authenticate any proprietary component. To enable
-cold downloads on your own machine after completing the existing managed setup,
-close the desktop player and explicitly launch:
-
-```sh
-python -m apple_music_player.bridge \
-  --auth-file ~/.config/apple-music-bridge/auth.json \
-  --country br --quality lossless \
-  --start-runtime ~/.local/share/apple-music-player
-```
-
-Adjust the runtime path if you use `XDG_DATA_HOME`. This explicitly starts only the
-already installed and locally signed-in managed runtime, verifies the existing
-pin/installation through `ManagedRuntime`, checks the returned storefront before
-download, and closes its own runtime on exit. No login prompt, sudo, installer or
-security setting changes. A busy runtime/cache is rejected, not taken over.
-
-The default cache is `~/.cache/apple-music-bridge` (or under `XDG_CACHE_HOME`), 10 GiB.
-It reuses the player's Cache implementation but is separate from the desktop cache.
-Use `--cache ~/.cache/apple-music-player` **with the GUI closed** if you explicitly
-want the existing app-owned media cache. Only app-owned cache directories are suitable;
-never point this at an arbitrary downloads/music folder. Existing lock, reconciliation,
-atomic completion, staging bounds and eviction safety checks apply.
+Cache directories must be app-owned, never arbitrary music/download folders.
+Default media cache remains `$XDG_CACHE_HOME/apple-music-bridge`; old desktop files
+are not moved or deleted. Runtime/cache locks reject concurrent owners.
 
 Restart with `--quality atmos` to request that variant. Quality is a server profile,
 not a standard Subsonic bitrate setting. IDs include storefront and quality to keep
@@ -140,11 +115,10 @@ queued artwork; already running workers finish subject to these limits.
 
 The existing safe image cache validates JPEG/PNG/WebP content and dimensions
 (maximum 2048 per side), then scales down to at most 1024 pixels in the bridge, without upscaling.
-The desktop image pipeline retains its previous 256-pixel limit.
 The bridge re-encodes decoded images as **PNG**, with `Content-Type: image/png`.
 This avoids relying on URL suffixes or sending unsupported source formats directly
-to clients. It uses existing PySide6 image codecs without a GUI/application window;
-catalog and classification logic remain independent of Qt. Supersonic's pinned Go
+to clients. Pillow provides the headless codecs with an explicit format allowlist;
+there is no Qt dependency. Supersonic's pinned Go
 client registers PNG and JPEG decoders. Missing, corrupt, denied or unsupported
 images return HTTP 503 with `Retry-After: 30`, `Cache-Control: no-store` and
 `X-Artwork-Status: unavailable`. Only absent artwork metadata (including unavailable
@@ -475,7 +449,7 @@ reuse the catalog cache; a larger prefix is another request through the shared
 three-second limiter. No undocumented upstream offset is sent. Offset 200 returns
 an empty page without another request. This is a bounded public search window,
 not full-catalog pagination; upstream ranking/catalog changes can shift pages.
-Qt defaults remain 50 artists/songs and 200 albums. Artist/album detail lookups
+Artist/album detail lookups
 remain explicit, separate operations. Client-side artist-first navigation must
 avoid automatic album/song expansion to realize the latency benefit.
 

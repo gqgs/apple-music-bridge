@@ -4,11 +4,11 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 
 import pytest
-from PySide6.QtGui import QImage
 from test_bridge import ALBUM, ARTIST, payload
 from test_bridge import bridge as _bridge
 from test_bridge_artwork import URL, raw_cover_response, transport
 
+from apple_music_player.artwork import decode
 from apple_music_player.bridge.release_artwork import ReleaseUnavailable
 from apple_music_player.catalog import CatalogDeferred
 
@@ -60,7 +60,7 @@ def test_default_search_gallery_cover_and_source_metadata(bridge, monkeypatch):
     assert node["coverArt"] == COVER and not server.release_art.pending
     assert payload(server, "getArtists")["artists"]["index"][0]["artist"][0]["coverArt"] == COVER
     status, headers, body = raw_cover_response(server, COVER)
-    assert status == 200 and not QImage.fromData(body).isNull()
+    assert status == 200 and decode(body) is not None
     assert headers["X-Artwork-Kind"] == "release-artwork"
     assert len(requests) == 1
     info = payload(server, "getArtistArtworkInfo", {"id": ID})["artistArtworkInfo"]
@@ -305,7 +305,7 @@ def test_artist_grid_burst_leaves_capacity_for_album_page(bridge, monkeypatch, i
             album_request = pool.submit(raw_cover_response, server, "am:br:lossless:album:200")
             if isolated:
                 result = album_request.result(timeout=5)
-                assert result[0] == 200 and not QImage.fromData(result[2]).isNull()
+                assert result[0] == 200 and decode(result[2]) is not None
             else:
                 from concurrent.futures import TimeoutError
 
@@ -421,7 +421,7 @@ def test_ep_or_single_only_artist_resolves_through_catalog_parser(bridge, monkey
         server.release_art.get(ID)
     wait_jobs(server.release_art)
     status, _, body = raw_cover_response(server, COVER)
-    assert status == 200 and not QImage.fromData(body).isNull()
+    assert status == 200 and decode(body) is not None
     assert server.release_art.get(ID).album_title == title
     assert calls == [("lookup", {"id": "1", "country": "br", "entity": "album", "limit": 200})]
 

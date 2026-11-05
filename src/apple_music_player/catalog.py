@@ -376,7 +376,7 @@ def grouped_releases(albums):
         return (-released, album.album_title.casefold(), album.country, album.id)
 
     groups = {
-        name: [] for name in ("Albums", "Singles & EPs", "Live Albums", "Compilations", "Others")
+        name: [] for name in ("Albums", "EPs", "Singles", "Live Albums", "Compilations", "Others")
     }
     for album in albums:
         groups[release_group(album)].append(album)

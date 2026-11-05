@@ -335,34 +335,35 @@ percentiles or a promise that every pending operation completes within its deadl
 
 Every serialized album includes OpenSubsonic `releaseTypes`: `getAlbum`, albums
 embedded in `getArtist`, `search3` album results, and `getAlbumList2`. Song/artist
-objects do not acquire an album-only field. The mapping uses the existing frozen,
-direct-weight classifier; it is approximate, not Apple's editorial classification.
-No classifier weights, catalog IDs, titles, sorting or playback behavior change.
+objects do not acquire an album-only field. The mapping uses the title-based direct-weight classifier; it is approximate, not
+Apple's editorial classification. EPs and Singles now have distinct network outputs;
+see [the classifier revision and comparison](release-classification.md). Catalog
+IDs, source titles and playback behavior remain unchanged.
 
 | Classifier category | Wire values |
 | --- | --- |
 | Albums | `["Album"]` |
-| Singles & EPs | `["EP"]`, `["Single"]`, or both, using the classifier's existing EP/single token features |
+| EPs | `["EP"]` |
+| Singles | `["Single"]` |
 | Live Albums | `["Live"]` |
 | Compilations | `["Compilation"]` |
 | Others, with a nonempty title | `["Other"]` |
-| Missing/blank title, unsupported category, or no subtype evidence | `[]` |
+| Missing/blank title or unsupported category | `[]` |
 
 Values use the spelling above; clients should normalize case. `Other` is an
 explicit category, distinct from unknown/absent metadata. Clients must not turn
 an empty array or unrecognized future string into explicit Other. In XML, each
 value is a repeated `<releaseTypes>` text element; an empty list has no elements.
-The title can contain both EP and Single evidence; both values still belong to
-the client's combined Singles & EPs section. Live/Compilation are emitted alone,
-without inventing a studio-album primary type or an additional subtype.
+When a short-release prediction has both EP and Single markers, EP takes precedence
+and the bridge emits only `["EP"]`. Live/Compilation winners remain unchanged and
+are emitted alone, without inventing a studio-album primary type.
 
-This is the integration contract for the Supersonic fork: map explicit `Other`
-to its Other flag/group, preserve an unknown state for absent/unrecognized types,
-and group EP/Single together. The inspected upstream normalizer currently falls
-back to Album when no recognized flags exist, including explicit Other; that client
-behavior needs the separate fork patch. No Supersonic repository code is changed
-by this bridge update. The mapper is independent of Qt and covered by JSON/XML
-HTTP regressions across all four album response locations.
+Clients can place EPs ahead of Singles in separate groups. Preserve unknown states
+for absent/unrecognized values and keep explicit Other separate. No Supersonic
+code changes here; that client update is separate. JSON/XML regressions cover all
+four album response locations, including ambiguous both-marker titles. Existing
+cached metadata is reclassified on serialization; client-cached album responses
+may require refresh.
 
 Protocol source: [OpenSubsonic AlbumID3 releaseTypes](https://opensubsonic.netlify.app/docs/responses/albumid3/),
 an optional array of strings rather than a closed enum. This metadata does not

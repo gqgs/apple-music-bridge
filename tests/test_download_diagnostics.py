@@ -87,6 +87,7 @@ sys.exit({exit_code})
             Track("us", "12345", "Fixture"), "lossless", threading.Event()
         )
     assert "PRIVATE_PAYLOAD" not in str(error.value)
+    assert error.value.category == "catalog-401"
     assert not list(stage.iterdir())
 
 
@@ -115,5 +116,6 @@ print("null")
             Track("us", "12345", "Fixture"), "lossless", threading.Event()
         )
     assert "service was reached" in str(error.value)
+    assert error.value.category == "wrapper-m3u8-api-404"
     assert "PRIVATE_PAYLOAD" not in str(error.value)
     assert not list(stage.iterdir())

@@ -15,6 +15,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
+from ..downloader import DIAGNOSTICS, DownloadError
 from ..model import PlayerError
 from .album_quality import AlbumQuality
 from .artwork import Covers, CoverUnavailable
@@ -278,6 +279,13 @@ class Handler(BaseHTTPRequestHandler):
         super().setup()
         self.connection.settimeout(15)
 
+    def send_response(self, code, message=None):
+        # A failed header/body write cannot be repaired by appending an error
+        # document (or another HTTP response) to what the client sees as audio.
+        self._response_started = True
+        self.close_connection = True
+        super().send_response(code, message)
+
     def reply(self, status, body=b"", mime="application/octet-stream", extra=None):
         self.send_response(status)
         headers = {
@@ -304,7 +312,7 @@ class Handler(BaseHTTPRequestHandler):
             or params.get("timeOffset", "0") != "0"
         ):
             raise BridgeError(
-                0, "Transcoding and time offsets are unsupported; request raw and use byte ranges"
+                10, "Transcoding and time offsets are unsupported; request raw and use byte ranges"
             )
         key, file, size, media = self.server.actor.acquire(
             params.get("id", ""), self.command == "HEAD"
@@ -320,7 +328,13 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 start, end = byte_range(requested, size)
             except ValueError:
-                self.reply(416, extra={"Content-Range": f"bytes */{size}"})
+                self.stream_error(
+                    416,
+                    10,
+                    "invalid-range",
+                    "Requested byte range is not available",
+                    extra={"Content-Range": f"bytes */{size}"},
+                )
                 return
             prefix = file.read(12)
             mime = (
@@ -365,10 +379,13 @@ class Handler(BaseHTTPRequestHandler):
                 self.wfile.write(chunk)
                 remaining -= len(chunk)
         finally:
-            file.close()
-            self.server.actor.call("release", key)
+            try:
+                file.close()
+            finally:
+                self.server.actor.call("release", key)
 
     def handle_api(self):
+        self._response_started = False
         fmt = "xml"
         method = ""
         try:
@@ -392,14 +409,37 @@ class Handler(BaseHTTPRequestHandler):
                     or self.headers.get("Content-Type", "").split(";")[0]
                     != "application/x-www-form-urlencoded"
                 ):
-                    self.reply(415)
+                    if method == "stream":
+                        self.stream_error(
+                            415, 10, "invalid-request", "Unsupported request encoding"
+                        )
+                    else:
+                        self.reply(415)
                     return
-                length = int(self.headers.get("Content-Length", "0"))
+                try:
+                    length = int(self.headers.get("Content-Length", "0"))
+                except ValueError:
+                    if method == "stream":
+                        raise BridgeError(10, "Invalid request length") from None
+                    raise
                 if not 0 <= length <= 8192:
-                    self.reply(413)
+                    if method == "stream":
+                        self.stream_error(413, 10, "invalid-request", "Request body is too large")
+                    else:
+                        self.reply(413)
                     return
-                data += "&" + self.rfile.read(length).decode("utf8")
-            pairs = parse_qs(data, keep_blank_values=True, max_num_fields=32)
+                try:
+                    data += "&" + self.rfile.read(length).decode("utf8")
+                except UnicodeError:
+                    if method == "stream":
+                        raise BridgeError(10, "Invalid request encoding") from None
+                    raise
+            try:
+                pairs = parse_qs(data, keep_blank_values=True, max_num_fields=32)
+            except ValueError:
+                if method == "stream":
+                    raise BridgeError(10, "Invalid request parameters") from None
+                raise
             if any(len(values) != 1 or len(values[0]) > 512 for values in pairs.values()):
                 raise BridgeError(10, "Duplicate or oversized parameters")
             params = {key: values[0] for key, values in pairs.items()}
@@ -491,49 +531,99 @@ class Handler(BaseHTTPRequestHandler):
                 )
                 return
             self.api_response(payload, fmt)
-        except CoverUnavailable as exc:
-            reason = safe_reason(getattr(exc, "reason", "lookup-failed"))
-            # go-subsonic recognizes XML errors; empty/JSON bodies are decoded as images.
-            self.api_response(
-                {
-                    "error": {
-                        "code": 0,
-                        "message": "Artwork temporarily unavailable [" + reason + "]; retry later",
-                    }
-                },
-                "xml",
-                status=getattr(exc, "status", 503),
-                extra={
-                    "Retry-After": str(getattr(exc, "retry_after", 30)),
-                    "Cache-Control": "no-store",
-                    "X-Artwork-Status": "unavailable",
-                    "X-Artwork-Reason": reason,
-                },
-            )
-        except BridgeError as exc:
-            if method == "getCoverArt":
+        except Exception as exc:
+            if self._response_started:
+                self.close_connection = True
+                return
+            if method == "stream":
+                self.stream_failure(exc)
+            elif isinstance(exc, CoverUnavailable):
+                reason = safe_reason(getattr(exc, "reason", "lookup-failed"))
+                # go-subsonic recognizes XML errors; empty/JSON bodies are decoded as images.
+                self.api_response(
+                    {
+                        "error": {
+                            "code": 0,
+                            "message": "Artwork temporarily unavailable ["
+                            + reason
+                            + "]; retry later",
+                        }
+                    },
+                    "xml",
+                    status=getattr(exc, "status", 503),
+                    extra={
+                        "Retry-After": str(getattr(exc, "retry_after", 30)),
+                        "Cache-Control": "no-store",
+                        "X-Artwork-Status": "unavailable",
+                        "X-Artwork-Reason": reason,
+                    },
+                )
+            elif isinstance(exc, BridgeError) and method == "getCoverArt":
                 status = {0: 503, 40: 401, 70: 404}.get(exc.code, 400)
                 self.cover_error(status, exc.code, exc.message)
-            else:
+            elif isinstance(exc, BridgeError):
                 self.api_response({"error": {"code": exc.code, "message": exc.message}}, fmt)
-        except (PlayerError, OSError, ValueError, TypeError):
-            if method == "getCoverArt":
+            elif method == "getCoverArt":
                 self.cover_error(503, 0, "Artwork temporarily unavailable")
-                return
-            self.api_response(
-                {
-                    "error": {
-                        "code": 0,
-                        "message": "Bridge operation unavailable; check local setup or retry later",
-                    }
-                },
-                fmt,
-            )
-        except Exception:
-            if method == "getCoverArt":
-                self.cover_error(503, 0, "Artwork temporarily unavailable")
+            elif isinstance(exc, (PlayerError, OSError, ValueError, TypeError)):
+                self.api_response(
+                    {
+                        "error": {
+                            "code": 0,
+                            "message": (
+                                "Bridge operation unavailable; check local setup or retry later"
+                            ),
+                        }
+                    },
+                    fmt,
+                )
             else:
                 self.api_response({"error": {"code": 0, "message": "Bridge operation failed"}}, fmt)
+
+    def stream_failure(self, exc):
+        status, code, reason, message = (
+            503,
+            0,
+            "stream-unavailable",
+            "Media temporarily unavailable",
+        )
+        if isinstance(exc, BridgeError):
+            errors = {
+                0: (503, "stream-unavailable", "Media temporarily unavailable; retry later"),
+                10: (400, "invalid-request", "Invalid stream parameters; request raw audio"),
+                30: (400, "api-version", "Requested API version is unsupported"),
+                40: (401, "authentication", "Invalid bridge credentials"),
+                43: (400, "authentication-conflict", "Conflicting authentication mechanisms"),
+                50: (403, "forbidden", "Stream access denied"),
+                70: (404, "media-unavailable", "Unknown media ID or media not available"),
+            }
+            code = exc.code if type(exc.code) is int and exc.code in errors else 0
+            status, reason, message = errors[code]
+        elif isinstance(exc, DownloadError):
+            category = exc.category
+            # Recheck at the HTTP boundary. Never parse or forward exception text,
+            # even when it contains a plausible category followed by private data.
+            if type(category) is str and category in DIAGNOSTICS:
+                reason, message = category, DIAGNOSTICS[category]
+                exit_code = exc.exit_code
+                if type(exit_code) is int and -255 <= exit_code <= 255:
+                    message += f" (exit {exit_code})"
+        elif not isinstance(exc, (PlayerError, OSError, ValueError, TypeError)):
+            status, reason, message = 500, "stream-failed", "Stream operation failed"
+        self.stream_error(status, code, reason, message)
+
+    def stream_error(self, status, code, reason, message, extra=None):
+        # OpenSubsonic binary endpoints always return XML errors, regardless of f.
+        # A non-2xx status also keeps clients from caching the document as audio.
+        headers = {"Content-Type": "text/xml", "X-Stream-Error": reason, **(extra or {})}
+        if status == 503:
+            headers["Retry-After"] = "3"
+        self.api_response(
+            {"error": {"code": code, "message": f"{message} [{reason}]"}},
+            "xml",
+            status=status,
+            extra=headers,
+        )
 
     def cover_error(self, status, code, message):
         reason = {401: "authentication", 404: "item-unavailable", 400: "invalid-request"}.get(

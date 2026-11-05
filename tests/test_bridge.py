@@ -88,7 +88,7 @@ def request(server, endpoint, params=None, method="GET", headers=None, auth=True
 
 def payload(server, endpoint, params=None, **kwargs):
     status, headers, body = request(server, endpoint, params, **kwargs)
-    if headers["Content-Type"].startswith("application/xml"):
+    if headers["Content-Type"].startswith(("application/xml", "text/xml")):
         import xml.etree.ElementTree as ET
 
         root = ET.fromstring(body)
@@ -273,8 +273,11 @@ def test_failed_downloader_does_not_leak_output(bridge, monkeypatch):
     payload(server, "search3", {"query": "fixture"})
     monkeypatch.setenv("TEST_MODE", "zero")
     response = request(server, "stream", {"id": "am:br:lossless:song:3"})
+    assert response[0] == 503
+    assert response[1]["Content-Type"] == "text/xml"
+    assert response[1]["X-Stream-Error"] == "no-result"
     assert b"TEST_SECRET" not in response[2]
-    assert json.loads(response[2])["subsonic-response"]["status"] == "failed"
+    assert ET.fromstring(response[2]).attrib["status"] == "failed"
     assert list(server.actor.core.cache.staging.iterdir()) == []
 
 
@@ -291,7 +294,9 @@ def test_shutdown_cancels_only_bridge_download(bridge, monkeypatch, tmp_path):
             time.sleep(0.02)
         assert pid_file.exists()
         server.actor.cancel.set()
-        assert json.loads(result.result(timeout=5)[2])["subsonic-response"]["status"] == "failed"
+        response = result.result(timeout=5)
+        assert response[0] == 503
+        assert ET.fromstring(response[2]).attrib["status"] == "failed"
     assert list(server.actor.core.cache.staging.iterdir()) == []
 
 

@@ -32,6 +32,16 @@ DIAGNOSTICS = {
     "finalize": "Downloaded media could not be finalized or tagged. Report this category.",
     "unavailable": "The requested track/format is unavailable. Try another song or quality.",
     "proxy": "Downloader network configuration failed. Report this category.",
+    "process-exit": "Downloader stopped before completing this request.",
+    "no-result": "Downloader returned no valid media summary. Check local setup or retry later.",
+    "timeout": "Download timed out. Check that your wrapper is running; retry.",
+    "cancelled": "Download cancelled.",
+    "storage-limit": "Download exceeded the 2 GiB staging allowance.",
+    "storage-space": "Not enough free disk space; download stopped.",
+    "media-invalid": "Downloader returned missing, empty, unsupported or unreadable audio.",
+    "probe-unavailable": "Cannot inspect audio. Install ffprobe and check the downloaded format.",
+    "downloader-missing": "Downloader not found. Check installation with apple-music-bridge setup.",
+    "local-io": "Download could not complete. Check paths, permissions and free disk space.",
 }
 
 # The pinned wrapper returns HTTP 200 even for application errors (e.g. a
@@ -112,7 +122,19 @@ ERROR_PREFIXES = (
 )
 
 
-class FormatUnavailable(PlayerError):
+class DownloadError(PlayerError):
+    """A fixed diagnostic category, separate from arbitrary exception text."""
+
+    def __init__(self, category, *, exit_code=None):
+        self.category = (
+            category if type(category) is str and category in DIAGNOSTICS else "download"
+        )
+        self.exit_code = exit_code if type(exit_code) is int and -255 <= exit_code <= 255 else None
+        detail = "" if self.exit_code is None else f"; exit {self.exit_code}"
+        super().__init__(f"Download failed [{self.category}{detail}]. {DIAGNOSTICS[self.category]}")
+
+
+class FormatUnavailable(DownloadError):
     """An explicit format miss, rather than a network, account or download failure."""
 
 
@@ -229,11 +251,9 @@ def probe(path, executable="ffprobe"):
         )
         return Media.from_probe(json.loads(result.stdout))
     except PlayerError:
-        raise
+        raise DownloadError("media-invalid") from None
     except Exception:
-        raise PlayerError(
-            "Cannot inspect audio. Install ffprobe and check the downloaded format."
-        ) from None
+        raise DownloadError("probe-unavailable") from None
 
 
 def lite_job_config(output, country):
@@ -293,9 +313,9 @@ class Downloader:
             if path.is_file():
                 size += path.stat().st_size
         if size > self.stage_limit:
-            raise PlayerError("Download exceeded the 2 GiB staging allowance.")
+            raise DownloadError("storage-limit")
         if shutil.disk_usage(job).free < 128 * 1024**2:
-            raise PlayerError("Not enough free disk space; download stopped.")
+            raise DownloadError("storage-space")
 
     def run(self, track, quality, cancel):
         if quality not in {"atmos", "lossless"}:
@@ -322,9 +342,7 @@ class Downloader:
     def _run(self, track, quality, cancel, deadline):
         binary = shutil.which(self.binary)
         if not binary:
-            raise PlayerError(
-                "Downloader not found. Check installation with apple-music-bridge setup."
-            )
+            raise DownloadError("downloader-missing")
         job = Path(tempfile.mkdtemp(prefix="job-", dir=self.staging))
         output = job / "output"
         output.mkdir()
@@ -335,9 +353,9 @@ class Downloader:
         process = None
         try:
             if cancel.is_set():
-                raise PlayerError("Download cancelled.")
+                raise DownloadError("cancelled")
             if time.monotonic() >= deadline:
-                raise PlayerError("Download timed out. Check that your wrapper is running; retry.")
+                raise DownloadError("timeout")
             args = [str(Path(binary).absolute()), "--json"]
             args.extend(["--config", str(config)])
             if quality == "atmos":
@@ -361,12 +379,10 @@ class Downloader:
                 selector.register(process.stderr, selectors.EVENT_READ, diagnostics)
                 while selector.get_map():
                     if cancel.is_set():
-                        raise PlayerError("Download cancelled.")
+                        raise DownloadError("cancelled")
                     now = time.monotonic()
                     if now >= deadline:
-                        raise PlayerError(
-                            "Download timed out. Check that your wrapper is running; retry."
-                        )
+                        raise DownloadError("timeout")
                     if now - last_check >= 0.25:
                         last_check = now
                         self.check_stage(job)
@@ -381,7 +397,7 @@ class Downloader:
             try:
                 code = process.wait(timeout=5)
             except subprocess.TimeoutExpired:
-                raise PlayerError("Downloader did not exit after completing output.") from None
+                raise DownloadError("timeout") from None
             if code != 0 or not summary.path:
                 misses = {"format-unavailable", "unavailable"}
                 errors = (summary.error, diagnostics.error)
@@ -398,16 +414,10 @@ class Downloader:
                     # Pinned amdl exits zero for an unavailable codec. A crash,
                     # signal or other nonzero exit is not a safe downgrade cue.
                     if category in misses and code != 0:
-                        raise PlayerError(
-                            f"Download failed [process-exit; exit {code}]. "
-                            "Downloader stopped before completing this request."
-                        )
-                    failure = FormatUnavailable if category in misses else PlayerError
-                    raise failure(f"Download failed [{category}]. {DIAGNOSTICS[category]}")
-                raise PlayerError(
-                    f"Download failed [no-result; exit {code}]. No valid media summary. "
-                    "Report this category, requested quality and storefront; do not share raw logs."
-                )
+                        raise DownloadError("process-exit", exit_code=code)
+                    failure = FormatUnavailable if category in misses else DownloadError
+                    raise failure(category)
+                raise DownloadError("no-result", exit_code=code)
             stop_group(process)
             self.check_stage(job)
             source = Path(summary.path)
@@ -415,10 +425,10 @@ class Downloader:
                 source = job / source
             source = safe_path(output, source)
             if not source.is_file() or source.stat().st_size == 0:
-                raise PlayerError("Downloader returned a missing or empty media file.")
+                raise DownloadError("media-invalid")
             media = probe(source)
             if cancel.is_set():
-                raise PlayerError("Download cancelled.")
+                raise DownloadError("cancelled")
             return job, source, media
         except PlayerError:
             if process:
@@ -429,9 +439,7 @@ class Downloader:
             if process:
                 stop_group(process)
             shutil.rmtree(job)
-            raise PlayerError(
-                "Download could not complete. Check paths, permissions and free disk space."
-            ) from None
+            raise DownloadError("local-io") from None
         finally:
             if process and process.stdout:
                 process.stdout.close()

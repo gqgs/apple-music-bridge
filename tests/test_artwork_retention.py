@@ -226,7 +226,18 @@ def test_same_album_corrections_replace_before_ranking(tmp_path, writer, fallbac
     if writer == "remember":
         core.remember([updated])
     else:
-        art.catalog = SimpleNamespace(artist_albums=lambda *_: [updated])
+        # Admit the lookup before metadata arrives, then reproduce a correction
+        # returned by that in-flight lookup. A queued lookup with an already
+        # usable selection now correctly retires without contacting the catalog.
+        core.cache.db.execute("DELETE FROM bridge_metadata")
+        core.cache.db.execute("UPDATE bridge_artist_artwork SET album=NULL,album_id=NULL")
+        core.cache.db.commit()
+
+        def lookup(*_):
+            core.remember([original, *([older] if fallback else [])])
+            return [updated]
+
+        art.catalog = SimpleNamespace(artist_albums=lookup)
         owner = other if correction == "reassigned" else ARTIST
         art.enrich(core.identity(owner), owner)
     expected = older if fallback else updated if correction == "backdated" else None

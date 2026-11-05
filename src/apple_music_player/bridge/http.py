@@ -468,7 +468,9 @@ class Handler(BaseHTTPRequestHandler):
                 payload = self.server.actor.core.cached_artwork(params.get("id", ""))
             elif method == "search3":
                 # Actor admission counts unique flights, not duplicate HTTP waiters.
+                query = self.server.release_art.seed.observe(params)
                 payload = self.server.actor.metadata(method, params)
+                self.server.release_art.seed.ready(query, payload)
             elif payload is None:
                 if not self.server.metadata_slots.acquire(blocking=False):
                     raise BridgeError(0, "Catalog busy; retry later")

@@ -14,6 +14,7 @@ from ..catalog import Catalog, CatalogDeferred
 from ..model import Album
 from .artwork import CoverUnavailable
 from .artwork_retention import rank, retain, saved_album
+from .artwork_seed import ArtworkSeed
 
 
 def safe_reason(reason):
@@ -52,6 +53,7 @@ class ReleaseArtwork:
         self.pending = {}
         self.metrics = actor.metrics
         self.pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="artist-release")
+        self.seed = ArtworkSeed(self)
 
     @contextmanager
     def connection(self):
@@ -149,10 +151,10 @@ class ReleaseArtwork:
                 raise ReleaseUnavailable("shutdown")
             if identifier in self.pending:
                 self.metrics.record("artist_release", "joined")
-                raise ReleaseUnavailable("release-pending")
+                raise ReleaseUnavailable("release-pending", self.seed.retry_after())
             if len(self.pending) >= 4:
                 self.metrics.record("artist_release", "busy")
-                raise ReleaseUnavailable("release-busy", 3)
+                raise ReleaseUnavailable("release-busy", self.seed.retry_after())
             self.metrics.record("artist_release", "miss")
             future = self.pool.submit(self.enrich, identifier, artist)
             self.pending[identifier] = future
@@ -163,7 +165,7 @@ class ReleaseArtwork:
 
         future.add_done_callback(finished)
         # No HTTP worker waits for catalog enrichment. The client can retry later.
-        raise ReleaseUnavailable("release-pending")
+        raise ReleaseUnavailable("release-pending", self.seed.retry_after())
 
     def enrich(self, identifier, artist):
         started = time.monotonic()
@@ -174,6 +176,7 @@ class ReleaseArtwork:
             for _ in range(16):
                 if self.stop.is_set() or time.monotonic() >= deadline:
                     return
+                self.seed.run()
                 while not self.actor.metadata_idle.is_set():
                     reason, delay = "release-deferred", 3
                     if time.monotonic() >= deadline or self.stop.wait(0.1):
@@ -184,6 +187,13 @@ class ReleaseArtwork:
                     if self.stop.wait(min(quiet_wait, max(0, deadline - time.monotonic()))):
                         return
                     continue
+                if self.stop.is_set() or time.monotonic() >= deadline:
+                    reason, delay = "release-deferred", 3
+                    return
+                # Recheck after foreground/quiet/limiter waits, immediately before admission.
+                if self.selection(artist):
+                    reason, delay = "release-resolved", 3600
+                    return
                 try:
                     albums = self.catalog.artist_albums(artist.id, artist.country)
                     break
@@ -203,27 +213,7 @@ class ReleaseArtwork:
             if self.stop.is_set():
                 return
             albums = [a for a in albums if a.country == artist.country]
-            with self.connection() as db:
-                for album in albums[:200]:
-                    identity = self.core.identity(album)
-                    self.core.parse(identity, "album")
-                    db.execute(
-                        "INSERT OR REPLACE INTO bridge_metadata VALUES (?,?)",
-                        (identity, json.dumps(asdict(album))),
-                    )
-                    db.execute(
-                        "INSERT OR REPLACE INTO bridge_artist_releases VALUES (?,?)",
-                        (identifier, identity),
-                    )
-                retain(db, [artist, *albums[:200]], self.core.identity)
-                db.execute(
-                    "DELETE FROM bridge_artist_releases WHERE rowid NOT IN "
-                    "(SELECT rowid FROM bridge_artist_releases ORDER BY rowid DESC LIMIT 10000)"
-                )
-                db.execute(
-                    "DELETE FROM bridge_metadata WHERE rowid NOT IN "
-                    "(SELECT rowid FROM bridge_metadata ORDER BY rowid DESC LIMIT 5000)"
-                )
+            self.store_albums(albums, artist)
             delay = 3600
             reason = "release-resolved" if self.selection(artist) else "release-unavailable"
         except Exception:
@@ -252,6 +242,45 @@ class ReleaseArtwork:
                 except sqlite3.Error:
                     pass
 
+    def store_albums(self, albums, artist=None, query=None):
+        """Publish bounded metadata; only exact lookups grant collaborator provenance."""
+        with self.connection() as db:
+            for album in albums[:200]:
+                identity = self.core.identity(album)
+                self.core.parse(identity, "album")
+                db.execute(
+                    "INSERT OR REPLACE INTO bridge_metadata VALUES (?,?)",
+                    (identity, json.dumps(asdict(album))),
+                )
+                if artist is not None:
+                    db.execute(
+                        "INSERT OR REPLACE INTO bridge_artist_releases VALUES (?,?)",
+                        (self.core.identity(artist), identity),
+                    )
+            retain(db, ([artist] if artist else []) + albums[:200], self.core.identity)
+            db.execute(
+                "DELETE FROM bridge_artist_releases WHERE rowid NOT IN "
+                "(SELECT rowid FROM bridge_artist_releases ORDER BY rowid DESC LIMIT 10000)"
+            )
+            db.execute(
+                "DELETE FROM bridge_metadata WHERE rowid NOT IN "
+                "(SELECT rowid FROM bridge_metadata ORDER BY rowid DESC LIMIT 5000)"
+            )
+            if query is not None:
+                # Only the final commit holds the generation lock, not SQLite
+                # writer admission, parsing, or retention work.
+                with self.seed.lock:
+                    if (
+                        query is not self.seed.current
+                        or query.cancelled.is_set()
+                        or self.stop.is_set()
+                    ):
+                        db.rollback()
+                        return False
+                    db.commit()
+        return True
+
     def close(self):
         self.stop.set()
+        self.seed.close()
         self.pool.shutdown(wait=False, cancel_futures=True)

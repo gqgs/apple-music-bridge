@@ -1,5 +1,11 @@
 # Direct-weight release classifier experiment
 
+Historical evidence: this directory's frozen five-category candidate, labels,
+results and timings are unchanged. The runtime now separates EPs and Singles;
+[its revision and new comparison](../../docs/release-classification.md) are documented
+separately. Historical accuracy/benchmarks do not evaluate the revised network.
+
+
 **Follow-up:** [independent candidate and real-release comparison](REAL_RESULTS.md).
 The original rule-encoding control below is retained for reproducibility. The
 follow-up freezes a different 101-parameter network before collecting labels.

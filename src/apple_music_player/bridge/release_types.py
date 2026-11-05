@@ -3,24 +3,17 @@
 No Qt dependency. Empty means unavailable/unknown; Other is an explicit prediction.
 """
 
-from ..release_classifier import FEATURES, classify, encode
+from ..release_classifier import classify
 
 
 def release_types(title):
     if not title.strip():
         return []
     label = classify(title)
-    if label == "Singles & EPs":
-        # The network deliberately groups these together. Reuse its existing
-        # lexical evidence to expose the subtype(s), without a new classifier.
-        features = dict(zip(FEATURES, encode(title), strict=True))
-        return [
-            name
-            for name, feature in (("EP", "ep_word"), ("Single", "single_word"))
-            if features[feature]
-        ]
     value = {
         "Albums": "Album",
+        "EPs": "EP",
+        "Singles": "Single",
         "Live Albums": "Live",
         "Compilations": "Compilation",
         "Others": "Other",

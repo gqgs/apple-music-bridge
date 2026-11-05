@@ -1,14 +1,15 @@
-"""Independent, one-pass direct-weight candidate; freeze before collecting labels.
+"""Title-based direct-weight classifier, with separate EP and Single outputs.
 
-Broad lexical evidence is combined numerically, not production-rule precedence.
-No classifier calls, title/artist identity lookup, fitting or optimizer.
+Derived from the frozen historical candidate in experiments/release_network.
+The original five-category evaluation does not measure this six-category revision.
+No fitting, optimizer, track-count inference or authoritative editorial metadata.
 """
 
 import math
 import re
 import unicodedata
 
-LABELS = ("Albums", "Singles & EPs", "Live Albums", "Compilations", "Others")
+LABELS = ("Albums", "EPs", "Singles", "Live Albums", "Compilations", "Others")
 FEATURES = (
     "title_present",
     "single_word",
@@ -22,8 +23,11 @@ FEATURES = (
     "remix_word",
 )
 
-# 10 -> 6 ReLU -> 5 linear. All 101 scalar parameters are specified here.
-# Hidden evidence channels: present, short release, live, compilation, remix, missing.
+# 10 -> 7 ReLU -> 6 linear, 125 explicitly specified scalar parameters.
+# Preserve the six historical channels; add the binary EP indicator.
+# Short score h = 3*single + 4*ep. EP score = h + 3*ep - 3;
+# Single score = h - 4*ep. Their maximum equals h for every binary input,
+# so unrelated winners/ties are preserved. Both markers choose EP (7 versus 3).
 W1 = (
     (1, 0, 0, 0, 0, 0, 0, 0, 0, 0),
     (0, 3, 4, 0, 0, 0, 0, 0, 0, 0),
@@ -31,25 +35,26 @@ W1 = (
     (0, 0, 0, 0, 0, 4, 3, 3, 4, 0),
     (0, 0, 0, 0, 0, 0, 0, 0, 0, 2),
     (-1, 0, 0, 0, 0, 0, 0, 0, 0, 0),
+    (0, 0, 1, 0, 0, 0, 0, 0, 0, 0),
 )
-B1 = (0, 0, 0, 0, 0, 1)
+B1 = (0, 0, 0, 0, 0, 1, 0)
 W2 = (
-    (0.5, -0.25, -0.25, -0.25, -0.25, -4),
-    (0, 1, 0, 0, 0, 0),
-    (0, -0.5, 1, 0, 0, 0),
-    (0, -0.5, 0, 1, 0, 0),
-    (0, 0, 0, 0, 1, 4),
+    (0.5, -0.25, -0.25, -0.25, -0.25, -4, 0),
+    (0, 1, 0, 0, 0, 0, 3),
+    (0, 1, 0, 0, 0, 0, -4),
+    (0, -0.5, 1, 0, 0, 0, 0),
+    (0, -0.5, 0, 1, 0, 0, 0),
+    (0, 0, 0, 0, 1, 4, 0),
 )
-B2 = (1, 0, 0, 0, 0)
+B2 = (1, -3, 0, 0, 0, 0)
 
 
 def encode(title):
-    # Deliberately broader than the production suffix-only checks; false positives
-    # are a hypothesis to measure, not filtered using evaluation labels.
+    # Preserve historical broad lexical cues, including their known false positives.
     normalized = unicodedata.normalize("NFKC", title).casefold()
     words = re.findall(r"[^\W_]+", normalized)
     tokens = set(words)
-    phrases = set(zip(words, words[1:]))
+    phrases = set(zip(words, words[1:], strict=False))
     values = (
         bool(title.strip()),
         bool(tokens & {"single", "sencillo", "sencilla"}),

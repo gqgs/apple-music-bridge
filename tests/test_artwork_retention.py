@@ -203,3 +203,117 @@ def test_retained_artwork_is_quality_scoped(tmp_path):
     finally:
         art.close()
         core.close()
+
+
+@pytest.mark.parametrize("writer", ["remember", "enrich"])
+@pytest.mark.parametrize("fallback", [False, True])
+@pytest.mark.parametrize("correction", ["empty_art", "future", "backdated", "reassigned"])
+def test_same_album_corrections_replace_before_ranking(tmp_path, writer, fallback, correction):
+    core = Core(tmp_path, 1024)
+    other = replace(ARTIST, id="99")
+    original = ready_album(id="2", release_date="2025-01-01")
+    older = ready_album(id="3", release_date="2022-01-01")
+    core.remember([ARTIST, other, original, *([older] if fallback else [])])
+    art = service(core)
+    changes = {
+        "empty_art": {"artwork_url": ""},
+        "future": {"release_date": "2099-01-01"},
+        "backdated": {"release_date": "2020-01-01"},
+        "reassigned": {"artist_id": "99"},
+    }
+    updated = replace(original, **changes[correction])
+    assert art.get(ID) == original
+    if writer == "remember":
+        core.remember([updated])
+    else:
+        art.catalog = SimpleNamespace(artist_albums=lambda *_: [updated])
+        owner = other if correction == "reassigned" else ARTIST
+        art.enrich(core.identity(owner), owner)
+    expected = older if fallback else updated if correction == "backdated" else None
+    assert art.selection(ARTIST) == expected
+    assert art.info(ID)["status"] == ("ready" if expected else "unavailable")
+    if correction == "reassigned":
+        assert art.selection(other) == updated
+    # The corrected result, including fallback/absence, survives bulk eviction
+    # and a restart; HTTP selection neither resurrects the old copy nor looks up.
+    core.cache.db.execute("DELETE FROM bridge_metadata")
+    core.cache.db.commit()
+    art.close()
+    core.close()
+    core = Core(tmp_path, 1024)
+    art = service(core)
+    try:
+        assert art.selection(ARTIST) == expected
+        if expected:
+            assert art.get(ID) == expected
+        assert not art.pending
+        if correction == "reassigned":
+            assert art.selection(other) == updated
+    finally:
+        art.close()
+        core.close()
+
+
+@pytest.mark.parametrize("primary", ["1", "99"])
+def test_corrected_primary_keeps_exact_lookup_provenance_after_pruning(tmp_path, primary):
+    core = Core(tmp_path, 1024)
+    core.remember([ARTIST])
+    original = ready_album(id="2", artist_id=primary, release_date="2025-01-01")
+    art = service(core, [original])
+    art.enrich(ID, ARTIST)
+    assert art.get(ID) == original
+    core.cache.db.execute("DELETE FROM bridge_artist_releases")
+    core.cache.db.execute("DELETE FROM bridge_metadata")
+    core.cache.db.commit()
+    art.close()
+    core.close()
+    core = Core(tmp_path, 1024)
+    art = service(core)
+    try:
+        updated = replace(original, artist_id="88", release_date="2020-01-01")
+        core.remember([updated])
+        assert art.get(ID) == updated
+        assert core.cache.db.execute(
+            "SELECT lookup FROM bridge_artist_artwork WHERE id=?", (ID,)
+        ).fetchone() == (1,)
+    finally:
+        art.close()
+        core.close()
+
+
+@pytest.mark.parametrize("primary,association", [("1", False), ("1", True), ("99", False)])
+@pytest.mark.parametrize("upgrade_quality", ["lossless", "atmos"])
+def test_provenance_upgrade_does_not_invent_primary_lookup(
+    tmp_path, primary, association, upgrade_quality
+):
+    core = Core(tmp_path, 1024)
+    core.remember([ARTIST])
+    original = ready_album(id="2", artist_id=primary, release_date="2025-01-01")
+    core.cache.db.execute(
+        "UPDATE bridge_artist_artwork SET album=? WHERE id=?",
+        (json.dumps(asdict(original)), ID),
+    )
+    if association:
+        core.cache.db.execute(
+            "INSERT INTO bridge_artist_releases VALUES (?,?)", (ID, core.identity(original))
+        )
+    core.cache.db.execute("ALTER TABLE bridge_artist_artwork DROP COLUMN lookup")
+    core.cache.db.commit()
+    core.close()
+    upgraded = Core(tmp_path, 1024, quality=upgrade_quality)
+    upgraded.close()
+    core = Core(tmp_path, 1024)
+    art = service(core)
+    try:
+        expected_lookup = association or primary != "1"
+        assert core.cache.db.execute(
+            "SELECT lookup FROM bridge_artist_artwork WHERE id=?", (ID,)
+        ).fetchone() == (int(expected_lookup),)
+        core.cache.db.execute("DELETE FROM bridge_artist_releases")
+        core.cache.db.commit()
+        updated = replace(original, artist_id="88")
+        core.remember([updated])
+        assert art.selection(ARTIST) == (updated if expected_lookup else None)
+    finally:
+        art.close()
+        core.close()

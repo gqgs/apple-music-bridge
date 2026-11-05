@@ -3,14 +3,19 @@
 Artist artwork is the newest **known**, available release, not necessarily the
 newest release in the live catalog. No background freshness polling is added.
 Browsing newer albums or completing an exact artist lookup updates the retained
-selection. Same-release metadata updates replace the retained payload too.
+selection. Same-release metadata updates replace or invalidate the retained
+payload before ranking; invalid artwork/dates and corrected primary artists
+cannot leave an older copy eligible. Affected artists fall back to other valid
+known candidates without making a catalog request in HTTP handling.
 
 `bridge_artist_artwork` retains a validated artist identity and at most one
 selected album per full artist/storefront/quality key, separately from the 5000
 bulk metadata rows. It retains at most 5000 artists, ordered by artist browsing
 or lookup insertion; bulk album insertion does not age out other artists. The
 retained selection also preserves the result of an exact collaborator lookup,
-without depending on the bulk association table's continued retention. Names
+using a per-selection lookup provenance flag, without depending on the bulk
+association table's continued retention. A corrected primary assignment clears
+previous owners unless that exact lookup provenance authorizes them. Names
 never establish an association. Once an artist itself leaves this bounded cache,
 browsing/resolving the exact artist again restores its identity; arbitrary cover
 IDs do not fabricate artists or initiate identity lookups on HTTP workers.

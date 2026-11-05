@@ -22,7 +22,7 @@ from ..downloader import Downloader
 from ..model import Album, Artist, PlayerError, Track
 from ..runtime import ManagedRuntime
 from ..runtime_install import RuntimeStore
-from .artwork_retention import retain
+from .artwork_retention import migrate_lookup_provenance, retain
 from .metrics import Metrics
 from .release_types import release_types
 
@@ -94,6 +94,7 @@ class Core:
             "CREATE TABLE IF NOT EXISTS bridge_artist_artwork "
             "(id TEXT PRIMARY KEY, data TEXT NOT NULL, album TEXT)"
         )
+        migrate_lookup_provenance(self.cache.db)
         if not retention_exists:
             # Previous 'unavailable' checks also represented successful lookups.
             # Re-evaluate once, on demand, under the existing bounded worker/limiter.

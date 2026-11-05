@@ -51,7 +51,7 @@ from apple_music_player.model import PlayerError, Track
         ),
         ("Received an empty response", "wrapper-m3u8-empty"),
         ("⚠ Failed to extract info from manifest: PRIVATE_PAYLOAD", "manifest"),
-        ("Failed to run v4: PRIVATE_PAYLOAD\nError detected, exiting...", "download"),
+        ("Failed to run v4: PRIVATE_PAYLOAD\nError detected, exiting...", "download-fairplay"),
         ("Defragment failed: PRIVATE_PAYLOAD", "finalize"),
         ("Unavailable\nnull", "unavailable"),
     ],

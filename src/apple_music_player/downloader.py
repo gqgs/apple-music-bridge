@@ -42,12 +42,31 @@ DIAGNOSTICS = {
     "probe-unavailable": "Cannot inspect audio. Install ffprobe and check the downloaded format.",
     "downloader-missing": "Downloader not found. Check installation with apple-music-bridge setup.",
     "local-io": "Download could not complete. Check paths, permissions and free disk space.",
+    "download-fairplay": "The FairPlay audio route failed; the lower-level cause is unknown.",
+    "fairplay-playlist": (
+        "The FairPlay media-playlist structure is unsupported or lacks expected segments. "
+        "This does not identify an HTTP status or prove format unavailability."
+    ),
+    "fairplay-container": "The FairPlay audio container did not match the expected structure.",
+    "fairplay-read": "The FairPlay audio fragment could not be read; the cause is unknown.",
+    "fairplay-decrypt": "The FairPlay audio fragment could not be decrypted.",
+    "fairplay-write": "The FairPlay audio fragment could not be encoded or written.",
+    "download-aac": "The AAC audio route failed; the lower-level cause is unknown.",
+    "aac-playlist-fetch": "The AAC media playlist request failed; the cause is unknown.",
+    "aac-playlist-parse": "The AAC media playlist could not be parsed or used.",
+    "aac-license": (
+        "The AAC content-key/license stage failed; this alone does not prove login failure."
+    ),
+    "aac-media": "The AAC media request or download failed; the cause is unknown.",
+    "aac-container": "The AAC audio container could not be read or had an unsupported structure.",
+    "aac-decrypt": "The AAC audio initialization or fragment could not be decrypted.",
+    "aac-write": "The AAC audio output could not be encoded or written.",
 }
 
 # The pinned wrapper returns HTTP 200 even for application errors (e.g. a
 # missing manifest is {code: 404, ...}). Distinguish those from HTTP/transport
 # failures without keeping the upstream message, response body or request URL.
-for _endpoint in ("status", "m3u8", "key"):
+for _endpoint in ("status", "m3u8", "key", "webplayback", "license"):
     for _kind in ("api", "http"):
         for _code in (400, 401, 403, 404, 429, 500, 502, 503, 504):
             DIAGNOSTICS[f"wrapper-{_endpoint}-{_kind}-{_code}"] = (
@@ -57,6 +76,9 @@ for _endpoint in ("status", "m3u8", "key"):
                     "The service was reached but could not provide this song's manifest. "
                     "Check the song/storefront; this alone does not prove expired login."
                     if _endpoint == "m3u8" and _kind == "api" and _code == 404
+                    else "This code does not distinguish unavailable audio from network, "
+                    "response or account-session failures. It is not a safe format-fallback cue."
+                    if _endpoint == "webplayback" and _kind == "api" and _code == 404
                     else "The service was reached; this is not a connection-refused error. "
                     "Report this category and storefront."
                 )
@@ -76,7 +98,7 @@ DIAGNOSTICS["wrapper-m3u8-empty"] = (
 
 def wrapper_category(detail, endpoint):
     match = re.match(
-        rb"lite-server /(status|m3u8|key) returned (code=)?"
+        rb"lite-server /(status|m3u8|key|webplayback|license) returned (code=)?"
         rb"(400|401|403|404|429|500|502|503|504)(?:\s|:|$)",
         detail,
     )
@@ -85,17 +107,26 @@ def wrapper_category(detail, endpoint):
         kind = "api" if match[2] else "http"
         return f"wrapper-{endpoint}-{kind}-{match[3].decode('ascii')}"
     # Only recognize transport errors for the configured loopback endpoint.
-    transport = re.match(
-        rb'Get "http://127\.0\.0\.1:12340/(status|m3u8|key)(?:\?[^"\r\n]*)?": (.*)',
+    transport = re.fullmatch(
+        rb'(Get|Post) "http://127\.0\.0\.1:12340/'
+        rb'(status|m3u8|key|webplayback|license)(?:\?[^"\r\n]{0,4096})?": ([^\r\n]{1,512})',
         detail,
     )
     if transport:
-        endpoint = transport[1].decode("ascii")
-        if transport[2] == b"dial tcp 127.0.0.1:12340: connect: connection refused":
+        endpoint = transport[2].decode("ascii")
+        if transport[1] != (b"Post" if endpoint == "license" else b"Get"):
+            return f"wrapper-{endpoint}-unknown"
+        if transport[3] == b"dial tcp 127.0.0.1:12340: connect: connection refused":
             return f"wrapper-{endpoint}-refused"
-        if any(
-            value in transport[2]
-            for value in (b"context deadline exceeded", b"i/o timeout", b"Client.Timeout")
+        if transport[3] in {
+            b"context deadline exceeded",
+            b"context deadline exceeded (Client.Timeout exceeded while awaiting headers)",
+            b"net/http: request canceled (Client.Timeout exceeded while awaiting headers)",
+            b"net/http: timeout awaiting response headers",
+            b"dial tcp 127.0.0.1:12340: i/o timeout",
+        } or re.fullmatch(
+            rb"read tcp 127\.0\.0\.1:[0-9]{1,5}->127\.0\.0\.1:12340: i/o timeout",
+            transport[3],
         ):
             return f"wrapper-{endpoint}-timeout"
     if detail.startswith(
@@ -103,6 +134,106 @@ def wrapper_category(detail, endpoint):
     ):
         return f"wrapper-{endpoint}-invalid-response"
     return f"wrapper-{endpoint}-unknown"
+
+
+def nested_wrapper_category(detail, endpoint):
+    """Only an explicit endpoint signature identifies a nested wrapper failure."""
+    path = endpoint.encode("ascii")
+    method = b"Post" if endpoint == "license" else b"Get"
+    if detail.startswith(b"lite-server /" + path + b" returned ") or re.match(
+        method + rb' "http://127\.0\.0\.1:12340/' + path + rb'(?:\?|": )', detail
+    ):
+        return wrapper_category(detail, endpoint)
+    return None
+
+
+def download_category(detail, route):
+    """Pinned amdl 452ba0b wrappers identify stages, never private error suffixes.
+
+    FairPlay Run does not check CDN HTTP status before parsing. In particular,
+    container/playlist errors must not be interpreted as HTTP or format misses.
+    AAC DownloadSong propagates playlist and media errors directly, and wraps
+    license exchange errors exactly once in 'acquire content key: '.
+    """
+    if route == "fairplay":
+        endpoint = nested_wrapper_category(detail, "key")
+        if endpoint:
+            return endpoint
+        if detail in {
+            b"m3u8 not of media type",
+            b"no segments extracted from playlist",
+            b"non-byterange playlists are currently unsupported",
+        }:
+            return "fairplay-playlist"
+        if detail in {b"no init segment found", b"segment number out of sync"} or re.fullmatch(
+            rb"unexpected box type [^\r\n]{4}, should be ftyp or moov", detail
+        ):
+            return "fairplay-container"
+        if detail.startswith(b"read fragment: "):
+            return "fairplay-read"
+        if re.match(rb"decryptFragment seq [0-9]{1,10}: ", detail):
+            return "fairplay-decrypt"
+        if re.match(rb"encode fragment seq [0-9]{1,10} failed: ", detail):
+            return "fairplay-write"
+        return "download-fairplay"
+
+    endpoint = nested_wrapper_category(detail, "webplayback")
+    if endpoint:
+        return endpoint
+    if detail.startswith(b"acquire content key: "):
+        nested = detail.removeprefix(b"acquire content key: ")
+        endpoint = nested_wrapper_category(nested, "license")
+        if endpoint:
+            return endpoint
+        if nested == b"empty license in lite-server response" or nested.startswith(
+            b"failed to decode license: "
+        ):
+            return "wrapper-license-invalid-response"
+        return "aac-license"
+    if detail.startswith(b"fetch media playlist: "):
+        return "aac-playlist-fetch"
+    if detail.startswith(b"parse media playlist: ") or detail in {
+        b"not a media playlist",
+        b"no matching key information found",
+        b"no initialization segment found",
+        b"invalid DRM key URI",
+        b"playlist is not encrypted",
+    }:
+        return "aac-playlist-parse"
+    if detail.startswith((b"create media request: ", b"download media: ")):
+        return "aac-media"
+    if detail.startswith(b"failed to decode file: ") or detail in {
+        b"file is not fragmented",
+        b"no init part of file",
+        b"styp inside an incomplete fragment",
+        b"mdat without preceding moof",
+        b"truncated fragment at end of file",
+    }:
+        return "aac-container"
+    if detail.startswith((b"failed to decrypt init: ", b"failed to decrypt segment: ")):
+        return "aac-decrypt"
+    if detail.startswith(
+        (
+            b"failed to write init: ",
+            b"failed to encode segment: ",
+            b"failed to write output: ",
+            b"create temporary output: ",
+            b"close temporary output: ",
+            b"replace output: ",
+        )
+    ):
+        return "aac-write"
+    return "download-aac"
+
+
+def diagnostic_priority(category):
+    if category in {"format-unavailable", "unavailable"}:
+        return 0
+    if category in {"catalog", "download"}:
+        return 1
+    if category in {"download-fairplay", "download-aac"}:
+        return 2
+    return 3
 
 
 ERROR_PREFIXES = (
@@ -114,8 +245,8 @@ ERROR_PREFIXES = (
     (b"Failed to rip song:", "catalog"),
     (b"Failed to rip album:", "catalog"),
     ("\u26a0 Failed to extract info from manifest:".encode(), "manifest"),
-    (b"Failed to run v4:", "download"),
-    (b"Failed to dl aac-lc via lite-server:", "download"),
+    (b"Failed to run v4:", "download-fairplay"),
+    (b"Failed to dl aac-lc via lite-server:", "download-aac"),
     (b"Defragment failed:", "finalize"),
     ("\u26a0 Failed to fix ALAC:".encode(), "finalize"),
     ("\u26a0 Failed to write tags in media:".encode(), "finalize"),
@@ -171,8 +302,17 @@ class Summary:
                     )
                     if match:
                         category += "-" + match[1][:3].decode("ascii")
+                elif category in {"download-fairplay", "download-aac"}:
+                    # Require the source's exact delimiter; do not search suffixes
+                    # for keywords or classify unrelated embedded error text.
+                    if line.startswith(prefix + b" "):
+                        category = download_category(
+                            line[len(prefix) + 1 :], category.removeprefix("download-")
+                        )
                 # Preserve the specific HTTP category over a later general error.
-                if not self.error or self.error in {"catalog", "format-unavailable", "unavailable"}:
+                if not self.error or diagnostic_priority(category) > diagnostic_priority(
+                    self.error
+                ):
                     self.error = category
                 return
         if line == b"Unavailable":
@@ -403,7 +543,11 @@ class Downloader:
                 errors = (summary.error, diagnostics.error)
                 # Hard errors/warnings must not be hidden by a format miss on
                 # the other pipe (or an unavailable web-manifest fallback).
-                category = next((error for error in errors if error and error not in misses), None)
+                category = max(
+                    (error for error in errors if error and error not in misses),
+                    key=diagnostic_priority,
+                    default=None,
+                )
                 category = (
                     category
                     or summary.warning
@@ -415,8 +559,9 @@ class Downloader:
                     # signal or other nonzero exit is not a safe downgrade cue.
                     if category in misses and code != 0:
                         raise DownloadError("process-exit", exit_code=code)
-                    failure = FormatUnavailable if category in misses else DownloadError
-                    raise failure(category)
+                    if category in misses:
+                        raise FormatUnavailable(category)
+                    raise DownloadError(category)
                 raise DownloadError("no-result", exit_code=code)
             stop_group(process)
             self.check_stage(job)

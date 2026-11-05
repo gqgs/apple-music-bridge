@@ -128,6 +128,14 @@ The GitHub repository has **not** been renamed yet.
   `X-Media-Codec`, `X-Media-Atmos`, `X-Requested-Quality` and `X-Quality-Fallback`.
   An unverified E-AC-3 stream is not labeled JOC-verified. Clients need appropriate
   passthrough support for spatial output and PCM output for stereo tracks.
+- Failed streams return a non-success HTTP status and an OpenSubsonic XML error
+  (`text/xml`, including when `f=json` was requested), never a successful audio
+  response. `X-Stream-Error` identifies a fixed, safe diagnostic category without
+  private upstream output. Busy/unavailable service returns 503 with `Retry-After`;
+  bridge credential errors return 401, invalid requests 400, unavailable IDs/media
+  404 and invalid byte ranges 416. A failure after media headers have started closes
+  the connection without appending an error document. Existing client-cached error
+  files may need clearing once; this does not establish the cause of older failures.
 - Completed media uses LRU eviction. Staging has a 2 GiB per-job guard and a
   128 MiB free-space reserve; fast writers can overshoot between checks. This is
   not a hard total-disk quota. User downloads outside this cache are never deleted.

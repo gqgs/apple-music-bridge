@@ -36,6 +36,31 @@ No proprietary runtime or account is executed. Fixed diagnostic categories separ
 wrapper endpoint/application-code failures from HTTP status, refusal, timeout,
 invalid response and empty result. Only allowlisted endpoints/codes/messages escape.
 
+The bridge also distinguishes the two audio routes from the pinned caller's fixed
+error prefixes: `download-fairplay` and `download-aac` identify the route but leave
+the lower-level cause unknown. Lossless mode can reach amdl's internal AAC route,
+so the requested preference does not establish which route failed.
+
+More specific labels are emitted only for anchored, source-verified wrappers:
+
+- `fairplay-playlist`, `fairplay-container`, `fairplay-read`, `fairplay-decrypt`
+  and `fairplay-write` follow `internal/fairplay-rip/runv4.go` messages.
+- `aac-playlist-fetch`, `aac-playlist-parse`, `aac-license`, `aac-media`,
+  `aac-container`, `aac-decrypt` and `aac-write` follow the song path through
+  `internal/widevine-rip/{runv5/runv5,playlist,rip,download,decrypt}.go`.
+- Explicit local `/key`, `/webplayback` and `/license` failures retain fixed
+  wrapper endpoint/API-code/HTTP-status/transport categories. AAC license errors
+  must have the exact `acquire content key: ` wrapper. Embedded words in a private
+  suffix or upstream `msg=` field are never searched for other causes.
+
+These categories describe where an existing operation failed, not the root cause.
+FairPlay does not check CDN HTTP status before parsing, so its playlist/container
+failures cannot establish a CDN 404. The pinned wrapper's `/webplayback` maps multiple
+failures to application code 404, including network failures, malformed or unexpected
+responses, account rejection and missing playback data. This code remains a hard
+failure, never a format-fallback cue. Unknown suffixes are discarded; neither these
+diagnostics nor retries change account/session state.
+
 Per-track fallback recognizes only the exact `Unavailable` result,
 `Failed to dl aac-lc via lite-server: Unavailable`, and
 `Failed to extract info from manifest: no codec found` (with the upstream warning
@@ -57,3 +82,28 @@ loopback lite endpoint, while the downloader has a 900-second job timeout and
 readiness probes use 0.5 seconds. The CLI status distinguishes a saved session and
 reachable service from verified media access. Never reauthenticate solely because
 a public catalog song is unavailable.
+
+## Catalog observations (Brazil, 2026-11-05)
+
+Public iTunes metadata and Apple Music release grouping provide different catalog
+views. These are dated observations, not permanent availability claims:
+
+- A [BR song lookup](https://itunes.apple.com/lookup?id=394277479,95787592,1719122348,1720511624&country=br&entity=song&limit=200)
+  returned explicit `isStreamable=false` for all 10 returned songs on *Stone Flower*
+  (`394277479`) and all 17 returned songs on the older *The Rising Tied (Deluxe Edition)*
+  (`95787592`). The two newer deluxe editions (`1719122348`, `1720511624`) each
+  returned 21 songs with `isStreamable=true`.
+- A [second BR lookup](https://itunes.apple.com/lookup?id=95780485,1345062256&country=br&entity=song&limit=200)
+  returned 16 songs with `isStreamable=true` for each of the other two *The Rising
+  Tied* editions (`95780485`, `1345062256`).
+- The [current deluxe album page](https://music.apple.com/br/album/the-rising-tied-deluxe-edition/1719122348)
+  grouped `1720511624`, `95780485` and `1345062256` under **Other Versions**.
+  Release grouping and playback availability are separate observations.
+
+Apple's public [Search API documentation](https://performance-partners.apple.com/search-api)
+does not document an `isStreamable` guarantee. An explicit false is a diagnostic
+clue; a missing field is unknown, and true does not prove playback for an account
+or requested format. These observations do not establish a licensing cause.
+`wrapper-webplayback-api-404` still cannot distinguish transport, response,
+account-session or missing-asset failures. No availability filter or fallback
+policy is inferred from these fields.

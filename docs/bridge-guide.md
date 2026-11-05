@@ -68,6 +68,8 @@ download, disk and cancellation errors stop the request instead of silently
 downgrading. Ordinary AC-3 returned by the upstream Atmos selector is retried as
 lossless, because Dolby Digital is not Atmos. No transcoding is performed.
 
+For automatic startup, see the [systemd user service guide](systemd.md).
+
 ## Existing installations
 
 Do **not** repeat setup or login if your current session works. Installed runtimes
@@ -90,7 +92,7 @@ The old `python -m apple_music_player.bridge ...` invocation and flags remain
 supported. The internal package and `runtime_child` module retain their old names
 for compatibility; the desktop `apple-music-player` command is retired. A fresh
 virtual environment removes old PySide6 dependencies and stale entrypoints.
-The GitHub repository has **not** been renamed yet.
+The GitHub repository is now `apple-music-bridge`.
 
 ## Behavior and limits
 

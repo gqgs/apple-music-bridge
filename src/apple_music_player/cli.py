@@ -16,6 +16,7 @@ from .bridge.http import auth_file
 from .model import PlayerError
 from .runtime import ManagedRuntime, health_status, session_saved
 from .runtime_install import RuntimeStore, host_problem, private_dir
+from .systemd import install as install_service
 
 
 def data_root():
@@ -106,7 +107,7 @@ def login(runtime):
 def main(argv=None):
     parser = argparse.ArgumentParser(description="Local Apple Music OpenSubsonic bridge")
     sub = parser.add_subparsers(dest="command", required=True)
-    for name in ("setup", "login", "status", "serve"):
+    for name in ("setup", "login", "status", "serve", "install-service"):
         command = sub.add_parser(name)
         command.add_argument("--runtime-root", type=Path)
         command.add_argument("--auth-file", type=Path, default=default_auth())
@@ -117,7 +118,13 @@ def main(argv=None):
                 action="store_true",
                 help="Consent to third-party runtime installation and pinned amdl download",
             )
-        if name == "serve":
+        if name == "install-service":
+            command.add_argument(
+                "--replace",
+                action="store_true",
+                help="Replace an existing service file after review",
+            )
+        if name in {"serve", "install-service"}:
             command.add_argument("--cache", type=Path)
             command.add_argument("--cache-gib", type=int, default=10)
             command.add_argument("--country", default="br")
@@ -139,6 +146,8 @@ def main(argv=None):
     store = runtime = None
     try:
         root = args.runtime_root if args.runtime_root is not None else data_root()
+        if args.command == "install-service":
+            return install_service(args, root)
         if args.command == "serve":
             options = [
                 "--auth-file",

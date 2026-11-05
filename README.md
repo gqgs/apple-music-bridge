@@ -46,6 +46,24 @@ and bridge caches are reused in place. Keep your existing `--auth-file`, `--cach
 and custom `--runtime-root` paths. The old `python -m apple_music_player.bridge`
 command still works. Use a fresh virtual environment to drop Qt and old entrypoints.
 
+## Start automatically on Linux
+
+After setup/login, run this from the virtual environment you want to keep:
+
+```sh
+apple-music-bridge install-service --country br --quality lossless
+systemctl --user daemon-reload
+systemctl --user enable --now apple-music-bridge.service
+```
+
+Stop any manually running bridge first. This installs a **user service**, starting
+at login and reusing your saved session. For startup at boot, before login, opt in
+to lingering with `loginctl enable-linger "$USER"` (may require administrator approval).
+No root service or automatic sign-in is needed. Keep custom `--runtime-root`,
+`--auth-file` and `--cache` options when installing the service.
+
+[Service controls, boot behavior and removal](docs/systemd.md).
+
 [Options, migration, tests and troubleshooting](docs/bridge-guide.md) ·
 [Runtime and authentication details](docs/rootless-setup.md) ·
 [Artwork sizing and caching](docs/artwork-sizing.md)

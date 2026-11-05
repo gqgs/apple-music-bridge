@@ -22,6 +22,7 @@ from ..downloader import Downloader
 from ..model import Album, Artist, PlayerError, Track
 from ..runtime import ManagedRuntime
 from ..runtime_install import RuntimeStore
+from .artwork_retention import migrate_lookup_provenance, retain
 from .metrics import Metrics
 from .release_types import release_types
 
@@ -83,6 +84,25 @@ class Core:
             # Old misses may have rejected valid collaborator releases. Expire
             # only these lookup checks; bounded admission still applies.
             self.cache.db.execute("UPDATE bridge_release_checks SET retry_after=0")
+        # Keep the schema marker and backfill/expiry atomic across interrupted upgrades.
+        if not self.cache.db.in_transaction:
+            self.cache.db.execute("BEGIN")
+        retention_exists = self.cache.db.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='bridge_artist_artwork'"
+        ).fetchone()
+        self.cache.db.execute(
+            "CREATE TABLE IF NOT EXISTS bridge_artist_artwork "
+            "(id TEXT PRIMARY KEY, data TEXT NOT NULL, album TEXT)"
+        )
+        migrate_lookup_provenance(self.cache.db)
+        if not retention_exists:
+            # Previous 'unavailable' checks also represented successful lookups.
+            # Re-evaluate once, on demand, under the existing bounded worker/limiter.
+            self.cache.db.execute(
+                "UPDATE bridge_release_checks SET retry_after=0 WHERE reason='release-unavailable'"
+            )
+            retain(self.cache.db, self.known("artist"), self.identity)
+            retain(self.cache.db, self.known("album"), self.identity)
         self.cache.db.commit()
         try:
             if runtime_root is not None:
@@ -123,6 +143,7 @@ class Core:
                 "INSERT OR REPLACE INTO bridge_metadata VALUES (?,?)",
                 (identifier, json.dumps(asdict(item))),
             )
+        retain(self.cache.db, items, self.identity)
         # Metadata is separate from media eviction and bounded independently.
         self.cache.db.execute(
             "DELETE FROM bridge_metadata WHERE rowid NOT IN "
@@ -154,7 +175,9 @@ class Core:
         try:
             with closing(sqlite3.connect(uri, uri=True, timeout=0.1)) as db:
                 row = db.execute(
-                    "SELECT data FROM bridge_metadata WHERE id=?", (identifier,)
+                    "SELECT data FROM bridge_artist_artwork WHERE id=? UNION ALL "
+                    "SELECT data FROM bridge_metadata WHERE id=? LIMIT 1",
+                    (identifier, identifier),
                 ).fetchone()
             if not row:
                 raise BridgeError(70, "Unknown artist")
@@ -248,6 +271,7 @@ class Core:
             "DELETE FROM bridge_artist_releases WHERE rowid NOT IN "
             "(SELECT rowid FROM bridge_artist_releases ORDER BY rowid DESC LIMIT 10000)"
         )
+        retain(self.cache.db, [artist, *values], self.identity)
         self.cache.db.commit()
         return [album for _, group in grouped_releases(values) for album in group]
 

@@ -584,3 +584,26 @@ def test_active_interactive_request_has_priority_over_release_lookup(bridge):
         assert server.actor.metadata_idle.is_set()
     finally:
         finish.set()
+
+
+def test_shared_retry_protocol_fixture(bridge, monkeypatch):
+    import json
+    from pathlib import Path
+
+    server, _ = bridge
+    server.actor.call("remember", [ARTIST])
+    monkeypatch.setattr("apple_music_player.bridge.release_artwork.time.time", lambda: 1000.0)
+    cases = json.loads((Path(__file__).parent / "fixtures/artwork_retry_protocol.json").read_text())
+    for case in cases:
+        with server.release_art.connection() as db:
+            db.execute(
+                "INSERT OR REPLACE INTO bridge_release_checks VALUES (?,?,?)",
+                (ID, 1000 + case["seconds"], case["reason"]),
+            )
+        status, headers, body = raw_cover_response(server, COVER)
+        assert status == case["status"]
+        assert headers["X-Artwork-Status"] == "unavailable"
+        assert headers["X-Artwork-Reason"] == case["reason"]
+        assert int(headers["Retry-After"]) == case["seconds"]
+        assert b'<error code="0"' in body
+        assert not server.release_art.pending

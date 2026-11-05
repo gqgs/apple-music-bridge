@@ -1,0 +1,92 @@
+[
+  {
+    "reason": "release-pending",
+    "seconds": 60,
+    "status": 503,
+    "pending": true
+  },
+  {
+    "reason": "release-pending",
+    "seconds": 300,
+    "status": 503,
+    "pending": true
+  },
+  {
+    "reason": "release-pending",
+    "seconds": 3600,
+    "status": 503,
+    "pending": true
+  },
+  {
+    "reason": "release-busy",
+    "seconds": 60,
+    "status": 503,
+    "pending": true
+  },
+  {
+    "reason": "release-busy",
+    "seconds": 300,
+    "status": 503,
+    "pending": true
+  },
+  {
+    "reason": "release-busy",
+    "seconds": 3600,
+    "status": 503,
+    "pending": true
+  },
+  {
+    "reason": "release-deferred",
+    "seconds": 60,
+    "status": 503,
+    "pending": true
+  },
+  {
+    "reason": "release-deferred",
+    "seconds": 300,
+    "status": 503,
+    "pending": true
+  },
+  {
+    "reason": "release-deferred",
+    "seconds": 3600,
+    "status": 503,
+    "pending": true
+  },
+  {
+    "reason": "release-failed",
+    "seconds": 60,
+    "status": 503,
+    "pending": true
+  },
+  {
+    "reason": "release-failed",
+    "seconds": 300,
+    "status": 503,
+    "pending": true
+  },
+  {
+    "reason": "release-failed",
+    "seconds": 3600,
+    "status": 503,
+    "pending": true
+  },
+  {
+    "reason": "release-unavailable",
+    "seconds": 60,
+    "status": 404,
+    "pending": false
+  },
+  {
+    "reason": "release-unavailable",
+    "seconds": 300,
+    "status": 404,
+    "pending": false
+  },
+  {
+    "reason": "release-unavailable",
+    "seconds": 3600,
+    "status": 404,
+    "pending": false
+  }
+]

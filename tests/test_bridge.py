@@ -55,6 +55,7 @@ def bridge(tmp_path, fake_downloader):
         )
     )
     server = Server(actor, {"username": "bridge", "key": KEY}, port=0)
+    server.release_art.catalog.search = FakeCatalog().search
     thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.02})
     thread.start()
     yield server, count

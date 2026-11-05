@@ -10,6 +10,7 @@ class Metrics:
 
     def record(self, stage, outcome, seconds=0):
         if stage not in {
+            "artist_seed",
             "artist_release",
             "artist_release_work",
             "cover_cache",

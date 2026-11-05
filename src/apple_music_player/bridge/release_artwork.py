@@ -8,13 +8,12 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import closing, contextmanager
 from dataclasses import asdict
-from datetime import date
 from urllib.parse import quote, urlsplit
 
-from ..artwork import BADGE_URL, allowed_url
 from ..catalog import Catalog, CatalogDeferred
 from ..model import Album
 from .artwork import CoverUnavailable
+from .artwork_retention import rank, retain, saved_album
 
 
 def safe_reason(reason):
@@ -27,6 +26,7 @@ def safe_reason(reason):
             "release-busy",
             "release-failed",
             "release-deferred",
+            "release-resolved",
             "shutdown",
             "lookup-failed",
         }
@@ -73,6 +73,14 @@ class ReleaseArtwork:
                     f"am:{artist.country}:{self.core.quality}:album:%",
                 ),
             ).fetchall()
+            saved = db.execute(
+                "SELECT album FROM bridge_artist_artwork WHERE id=?",
+                (self.core.identity(artist),),
+            ).fetchone()
+            if saved and saved[0]:
+                album = saved_album(saved[0], self.core.identity(artist), self.core.identity)
+                if album:
+                    rows.append((saved[0], self.core.identity(album)))
         choices = []
         for raw, associated in rows:
             album = Album(**json.loads(raw))
@@ -80,17 +88,9 @@ class ReleaseArtwork:
                 album.artist_id != artist.id and associated != self.core.identity(album)
             ):
                 continue
-            if not allowed_url(album.artwork_url) or album.artwork_url == BADGE_URL:
-                continue
-            try:
-                released = (
-                    date.fromisoformat(album.release_date[:10]) if album.release_date else date.min
-                )
-            except ValueError:
-                continue
-            if released > date.today():
-                continue
-            choices.append((released, album.id, album))
+            candidate_rank = rank(album)
+            if candidate_rank is not None:
+                choices.append((*candidate_rank, album))
         return max(choices, key=lambda value: value[:2])[2] if choices else None
 
     def check(self, identifier):
@@ -98,7 +98,7 @@ class ReleaseArtwork:
             row = db.execute(
                 "SELECT retry_after,reason FROM bridge_release_checks WHERE id=?", (identifier,)
             ).fetchone()
-        return row if row else (0, "release-failed")
+        return row if row and row[1] != "release-resolved" else (0, "release-failed")
 
     def retry_after(self, identifier):
         return self.check(identifier)[0]
@@ -215,6 +215,7 @@ class ReleaseArtwork:
                         "INSERT OR REPLACE INTO bridge_artist_releases VALUES (?,?)",
                         (identifier, identity),
                     )
+                retain(db, [artist, *albums[:200]], self.core.identity)
                 db.execute(
                     "DELETE FROM bridge_artist_releases WHERE rowid NOT IN "
                     "(SELECT rowid FROM bridge_artist_releases ORDER BY rowid DESC LIMIT 10000)"
@@ -224,7 +225,7 @@ class ReleaseArtwork:
                     "(SELECT rowid FROM bridge_metadata ORDER BY rowid DESC LIMIT 5000)"
                 )
             delay = 3600
-            reason = "release-unavailable"
+            reason = "release-resolved" if self.selection(artist) else "release-unavailable"
         except Exception:
             reason, delay = "release-failed", 300
             # No provider payloads, credentials, or URLs in diagnostics.

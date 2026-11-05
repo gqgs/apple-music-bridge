@@ -317,3 +317,27 @@ def test_provenance_upgrade_does_not_invent_primary_lookup(
     finally:
         art.close()
         core.close()
+
+
+@pytest.mark.parametrize("exact", [False, True])
+def test_indexed_selection_upgrade_preserves_existing_provenance(tmp_path, exact):
+    core = Core(tmp_path, 1024)
+    original = ready_album(id="2", release_date="2025-01-01")
+    core.remember([ARTIST, original])
+    core.cache.db.execute("UPDATE bridge_artist_artwork SET lookup=? WHERE id=?", (int(exact), ID))
+    core.cache.db.execute("DROP INDEX bridge_selected_album_idx")
+    core.cache.db.execute("ALTER TABLE bridge_artist_artwork DROP COLUMN album_id")
+    core.cache.db.commit()
+    core.close()
+    core = Core(tmp_path, 1024)
+    art = service(core)
+    try:
+        assert core.cache.db.execute(
+            "SELECT album_id,lookup FROM bridge_artist_artwork WHERE id=?", (ID,)
+        ).fetchone() == (core.identity(original), int(exact))
+        updated = replace(original, artist_id="99")
+        core.remember([updated])
+        assert art.selection(ARTIST) == (updated if exact else None)
+    finally:
+        art.close()
+        core.close()

@@ -28,7 +28,11 @@ learned absence is still cached for one hour. Successful lookups now record
 `release-resolved`; missing or damaged selected data under that state permits
 repair instead of returning a false one-hour 404. Provider failures and cooldowns
 retain their transient deadlines. The migration marker is table existence and
-all migration writes commit together.
+all migration writes commit together. An indexed full selected-album key and
+reverse lookup index limit correction work to affected owners. Candidate reads
+are batched using the metadata artist index and album primary keys; song-only
+inputs perform no retention SQL. The selected key and lookup flag occupy the
+same bounded artist row, not a second unbounded history.
 
 For HTTP 503 with `X-Artwork-Status: unavailable`, these existing reasons denote
 retryable artwork: `release-pending`, `release-busy`, `release-deferred`, and

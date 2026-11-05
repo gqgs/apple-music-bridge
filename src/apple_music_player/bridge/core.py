@@ -99,8 +99,7 @@ class Core:
             # Previous 'unavailable' checks also represented successful lookups.
             # Re-evaluate once, on demand, under the existing bounded worker/limiter.
             self.cache.db.execute(
-                "UPDATE bridge_release_checks SET retry_after=0 "
-                "WHERE reason='release-unavailable'"
+                "UPDATE bridge_release_checks SET retry_after=0 WHERE reason='release-unavailable'"
             )
             retain(self.cache.db, self.known("artist"), self.identity)
             retain(self.cache.db, self.known("album"), self.identity)

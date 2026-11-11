@@ -14,7 +14,9 @@ proxies are not used, and tokens/upstream errors are never logged or returned.
 No session is copied or persisted by this feature.
 
 Apple's unofficial syllable-lyrics response is reduced to line-level timestamps
-in milliseconds. TTML media-clock/offset timing and untimed text are supported;
+in milliseconds. Apple's absolute song times (including bare decimal seconds)
+are preserved rather than adding section and line starts together. Lyric/timing
+collection excludes head metadata. TTML media-clock/offset timing and untimed text are supported;
 unsupported timing falls back to plain lines rather than fabricated timestamps.
 Word-level karaoke, translations/romanizations, and language selection are not
 implemented. The legacy title/artist `getLyrics` endpoint remains an empty
@@ -36,3 +38,12 @@ lyrics in Apple Music; no need to delete the media cache.
 Tests use synthetic lyrics and mock Apple responses. Live account coverage must
 be checked on the user's signed-in installation. Displaying lyrics in a public
 broadcast is a separate rights question from private playback.
+
+## Timing regression checks
+
+The Apple timing dialect follows the [Apple Video and Audio Asset Guide](https://help.apple.com/itc/videoaudioassetguide/en.lproj/static.html)
+(Timed Lyrics). The generic TTML parser keeps relative container timing separately.
+Synthetic fixtures cover decimal seconds, absolute section/line times, span-only
+starts, and metadata exclusion. Public Apple-format fixtures in
+[AMLL](https://github.com/Steve-xmh/applemusic-like-lyrics/tree/9db9236818464ce83f696ee9c5ff0e5395cb744a/packages/ttml/tests/fixtures)
+were checked locally without copying song lyrics into this repository.

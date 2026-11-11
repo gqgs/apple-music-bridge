@@ -194,3 +194,46 @@ def test_nested_sequential_timing_is_not_guessed():
         '<span begin="1s">two</span></span></p></body></tt>'
     )
     assert not lyrics.parse_ttml(raw)[0]["synced"]
+
+
+def test_apple_absolute_times_and_bare_seconds():
+    raw = """<tt xmlns="http://www.w3.org/ns/ttml"><body><div begin="1.152">
+    <p begin="1.152"><span begin="1.152">First</span></p>
+    <p begin="5.838">Second</p></div><div begin="1:10.522">
+    <p begin="1:10.522">Third</p></div></body></tt>"""
+    result = lyrics.parse_response({"data": [{"attributes": {"ttmlLocalizations": raw}}]})[0]
+    assert result["synced"]
+    assert [row["start"] for row in result["line"]] == [1152, 5838, 70522]
+    assert lyrics.timestamp("1.152") is None  # not generic TTML offset syntax
+
+
+def test_apple_span_times_and_untimed_metadata():
+    raw = """<tt><head><metadata><p>Not a lyric</p><span begin="unknown"/></metadata></head>
+    <body><div begin="10.5"><p><span begin="11.2">First </span>
+    <span begin="12.0">line</span></p><p begin="14.5">Next line</p></div></body></tt>"""
+    result = lyrics.parse_response({"data": [{"attributes": {"ttmlLocalizations": raw}}]})[0]
+    assert result["synced"]
+    assert result["line"] == [
+        {"start": 11200, "value": "First line"},
+        {"start": 14500, "value": "Next line"},
+    ]
+
+
+def test_apple_untimed_lines_do_not_inherit_section_start():
+    raw = '<tt><body><div begin="10.5"><p>First</p><p>Second</p></div></body></tt>'
+    result = lyrics.parse_ttml(raw, apple_timing=True)[0]
+    assert not result["synced"]
+    assert all("start" not in line for line in result["line"])
+
+
+def test_apple_text_field_can_contain_ttml():
+    raw = '<tt><body><p begin="1.5">Synthetic</p></body></tt>'
+    result = lyrics.parse_response({"data": [{"attributes": {"text": raw}}]})[0]
+    assert result["synced"] and result["line"] == [{"start": 1500, "value": "Synthetic"}]
+
+
+def test_foreign_timing_annotations_do_not_disable_apple_lyrics():
+    raw = """<tt xmlns="http://www.w3.org/ns/ttml" xmlns:note="urn:note"><body>
+    <note:p begin="unknown">Annotation</note:p><p begin="2.5">Synthetic</p></body></tt>"""
+    result = lyrics.parse_ttml(raw, apple_timing=True)[0]
+    assert result["synced"] and result["line"] == [{"start": 2500, "value": "Synthetic"}]

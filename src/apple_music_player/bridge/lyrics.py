@@ -39,10 +39,12 @@ def read_token(directory, name):
     return token
 
 
-def timestamp(value):
+def timestamp(value, *, apple_timing=False):
     """TTML media-clock and offset times, converted to OpenSubsonic milliseconds."""
     if not isinstance(value, str):
         return None
+    if apple_timing and re.fullmatch(r"\d+(?:\.\d+)?", value):
+        value += "s"
     match = re.fullmatch(r"(\d+(?:\.\d+)?)(ms|s|m|h)", value)
     if match:
         seconds = float(match[1]) * {"ms": 0.001, "s": 1, "m": 60, "h": 3600}[match[2]]
@@ -63,25 +65,43 @@ def text_content(element):
     return "".join(parts)
 
 
-def parse_ttml(raw):
+def parse_ttml(raw, *, apple_timing=False):
     if not isinstance(raw, str) or len(raw.encode()) > MAX_BYTES:
         raise ValueError("Invalid lyrics")
     if "<!DOCTYPE" in raw.upper() or "<!ENTITY" in raw.upper():
         raise ValueError("Invalid lyrics")
     root = ET.fromstring(raw)
-    if root.tag.split("}")[-1] != "tt":
+    if root.tag not in {"tt", "{http://www.w3.org/ns/ttml}tt"}:
         raise ValueError("Invalid lyrics")
     lines = []
+    # Only body content is displayed: translation/annotation metadata in head must
+    # not disable synchronization or appear as additional lyric lines.
+    namespace = root.tag.removesuffix("tt")
+
+    def is_ttml(node):
+        return node.tag.startswith(namespace) if namespace else "}" not in node.tag
+
+    bodies = [node for node in root if node.tag == namespace + "body"]
+    if len(bodies) != 1:
+        return []
+    body = bodies[0]
+
+    def when(value):
+        return timestamp(value, apple_timing=apple_timing)
 
     def collect(node, base=0, valid=True, inherited=False):
+        if not is_ttml(node):
+            return
         # TTML begin times are relative to the containing time container.
         # Sequential/frame/tick timing is not interpreted as media-clock timing.
         valid = valid and node.get("timeContainer", "par") == "par"
         begin = node.get("begin")
-        offset = timestamp(begin) if begin is not None else 0
+        offset = when(begin) if begin is not None else 0
         valid = valid and offset is not None
-        base += offset or 0
-        timed = inherited or begin is not None
+        # Apple lyric TTML repeats absolute song times on div/p/span elements.
+        # Generic TTML containers instead use relative offsets.
+        base = (offset or 0) if apple_timing else base + (offset or 0)
+        timed = begin is not None if apple_timing else inherited or begin is not None
         if node.tag.split("}")[-1] == "p":
             value = " ".join(text_content(node).split())
             start = base if valid and timed else None
@@ -89,10 +109,12 @@ def parse_ttml(raw):
                 starts = []
 
                 def span_time(child, origin):
-                    offset = timestamp(child.get("begin"))
+                    if not is_ttml(child):
+                        return
+                    offset = when(child.get("begin"))
                     if child.get("begin") is not None and offset is None:
                         return
-                    origin += offset or 0
+                    origin = (offset or 0) if apple_timing else origin + (offset or 0)
                     if offset is not None:
                         starts.append(origin)
                     for nested in child:
@@ -109,14 +131,15 @@ def parse_ttml(raw):
         for child in node:
             collect(child, base, valid, timed)
 
-    collect(root)
+    collect(body)
     if not lines:
         return []
     timing_supported = (
         all(
             node.get("timeContainer", "par") == "par"
-            and (node.get("begin") is None or timestamp(node.get("begin")) is not None)
-            for node in root.iter()
+            and (node.get("begin") is None or when(node.get("begin")) is not None)
+            for node in body.iter()
+            if is_ttml(node)
         )
         and root.get("{http://www.w3.org/ns/ttml#parameter}timeBase", "media") == "media"
     )
@@ -150,9 +173,11 @@ def parse_response(data):
         raise ValueError("Invalid lyrics response")
     for field in ("ttmlLocalizations", "ttml"):
         if isinstance(attrs.get(field), str) and attrs[field].strip():
-            return parse_ttml(attrs[field])
+            return parse_ttml(attrs[field], apple_timing=True)
     plain = attrs.get("text")
     if isinstance(plain, str):
+        if re.match(r"\s*(?:<\?xml\b|<tt(?:\s|>))", plain):
+            return parse_ttml(plain, apple_timing=True)
         if any(
             not (
                 c in "\t\n\r"

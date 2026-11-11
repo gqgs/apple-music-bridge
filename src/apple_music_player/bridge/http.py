@@ -20,11 +20,13 @@ from ..model import PlayerError
 from .album_quality import AlbumQuality
 from .artwork import Covers, CoverUnavailable
 from .core import BridgeError, Core
+from .lyrics import Lyrics
 from .release_artwork import ReleaseArtwork, safe_reason
 
 EXTENSIONS = [
     {"name": "apiKeyAuthentication", "versions": [1]},
     {"name": "formPost", "versions": [1]},
+    {"name": "songLyrics", "versions": [1]},
     {"name": "appleMusicAlbumAudioQuality", "versions": [1]},
 ]
 
@@ -464,7 +466,18 @@ class Handler(BaseHTTPRequestHandler):
                 )
                 return
             if method == "getLyricsBySongId":
-                self.server.actor.core.parse(params.get("id", ""), "song")
+                _, numeric = self.server.actor.core.parse(params.get("id", ""), "song")
+                self.api_response(
+                    {
+                        "lyricsList": {
+                            "structuredLyrics": self.server.lyrics.get(
+                                self.server.actor.core.country, numeric
+                            )
+                        }
+                    },
+                    fmt,
+                )
+                return
             if method == "getAlbumAudioQuality":
                 identifier = params.get("id", "")
                 _, numeric = self.server.actor.core.parse(identifier, "album")
@@ -675,6 +688,8 @@ class Server(ThreadingHTTPServer):
         self.covers = Covers(actor.core.cache.root / "artwork", self.metrics)
         self.release_art = ReleaseArtwork(actor)
         self.album_quality = AlbumQuality()
+        runtime = actor.core.runtime
+        self.lyrics = Lyrics(runtime.data if runtime is not None else None)
         try:
             super().__init__(("127.0.0.1", port), Handler)
         except Exception:

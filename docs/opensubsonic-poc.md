@@ -486,10 +486,10 @@ through the web tool during this change; no new portrait endpoint or URL was gue
 
 ### Optional lyrics requests
 
-The bridge has no lyrics source. `getLyrics` returns an empty `lyrics` object and
-`getLyricsBySongId` returns an empty `structuredLyrics` list, after authentication
-and typed song-ID validation. Neither request fetches catalog or lyric data.
-These use the [standard lyrics response](https://opensubsonic.netlify.app/docs/endpoints/getlyrics/)
-and [structured lyrics list](https://opensubsonic.netlify.app/docs/endpoints/getlyricsbysongid/)
-shapes, rather than reporting an unimplemented endpoint during ordinary playback.
-This is an empty-result compatibility response, not lyrics support or a new provider.
+The bridge advertises `songLyrics` version 1 and implements `getLyricsBySongId`
+with Apple lyrics in the standard structured response. Requests authenticate and
+validate the song ID/storefront before accessing the provider. `getLyrics`
+(title/artist lookup) retains its empty compatibility response.
+
+See [lyrics setup, transport and limitations](lyrics.md). Missing lyrics return
+an empty structured list, allowing client-side fallback.

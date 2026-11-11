@@ -420,3 +420,29 @@ def test_absent_lyrics_are_empty_without_catalog_work(bridge, method, params, ke
         status == 200
         and ET.fromstring(body).find("{http://subsonic.org/restapi}" + key) is not None
     )
+
+
+def test_apple_lyrics_json_xml_and_auth(bridge):
+    from apple_music_player.bridge.lyrics import Lyrics
+
+    server, _ = bridge
+    calls = []
+
+    def fetch(country, identifier):
+        calls.append((country, identifier))
+        return [{"lang": "eng", "synced": True, "line": [{"start": 250, "value": "Fixture"}]}]
+
+    server.lyrics = Lyrics(fetch=fetch)
+    params = {"id": "am:br:lossless:song:3"}
+    assert payload(server, "getLyricsBySongId", params, auth=False)["error"]["code"] == 40
+    assert not calls
+    for bad in ("am:us:lossless:song:3", "am:br:lossless:album:3", "../3"):
+        assert payload(server, "getLyricsBySongId", {"id": bad})["error"]["code"] == 70
+    assert not calls
+    result = payload(server, "getLyricsBySongId", params)
+    assert result["lyricsList"]["structuredLyrics"][0]["line"][0]["start"] == 250
+    _, _, body = request(server, "getLyricsBySongId", dict(params, f="xml"))
+    assert (
+        ET.fromstring(body).find(".//{http://subsonic.org/restapi}line").get("value") == "Fixture"
+    )
+    assert calls == [("br", "3")]

@@ -144,7 +144,8 @@ The GitHub repository is now `apple-music-bridge`.
 - Runtime/session directories are private; stored tokens are **not encrypted**.
   Login uses sealed memfd arguments and a private 2FA FIFO. No raw subprocess
   output is logged. [Runtime/security details](rootless-setup.md).
-- No library edits, cloud history, personalized recommendations, lyrics provider
+- [Line-synced lyrics](lyrics.md) use the existing session with verified HTTPS.
+- No library edits, cloud history, personalized recommendations
   or new DRM implementation. Pinned external amdl handles download/decryption.
 
 ## Test

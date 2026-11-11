@@ -354,11 +354,9 @@ def test_http_busy_retry_budget_survives_slow_seed(bridge, monkeypatch, coverage
 
     try:
         retry_at = provider()
-        assert observed == [
-            (0, 503, "release-busy"),
-            (3, 503, "release-busy"),
-            (6, 503, "release-busy"),
-        ]
+        # Subtracting the fractional clock origin may introduce float rounding.
+        assert [row[0] for row in observed] == pytest.approx([0, 3, 6], abs=1e-9)
+        assert [row[1:] for row in observed] == [(503, "release-busy")] * 3
         # Remaining admission budget + the catalog's 15s operation timeout.
         assert retry_at == base + 45
         clock.now = base + 29
